@@ -26,9 +26,10 @@ export class Pipeline {
     this.concurrency = concurrency;
   }
 
-  /** 카페24에서 미답변 문의를 가져와 새 문의만 저장한다. */
+  /** 카페24에서 미답변 문의와 최근 상품 후기를 가져와 새 글만 저장한다. */
   async sync(): Promise<number> {
-    return this.store.addInquiries(await this.cafe24.listUnansweredInquiries());
+    const [inquiries, reviews] = await Promise.all([this.cafe24.listUnansweredInquiries(), this.cafe24.listNewReviews()]);
+    return this.store.addInquiries([...inquiries, ...reviews]);
   }
 
   /** new 상태 문의를 모두 초안으로 만든다. 이미 돌고 있으면 그 작업을 기다린다. */

@@ -68,8 +68,9 @@ const won = (amount: string) => `${Number(amount).toLocaleString("ko-KR")}원`;
 // 건너뛰어 이 안내가 매번 빠졌다(EVAL-CC). 그래서 사이즈 계산 결과에 늘 함께 넣는다.
 const SIZE_POLICY_IDS = ["size-guide#상담 원칙", "exchange-return#첫 사이즈 교환 무료"];
 
-function stockLabel(quantity: number, selling: "T" | "F"): string {
+function stockLabel(quantity: number, selling: "T" | "F", useInventory?: "T" | "F"): string {
   if (selling === "F") return "판매 중지";
+  if (useInventory === "F") return "판매중(재고 수량을 관리하지 않는 상품)";
   if (quantity <= 0) return "품절";
   return quantity <= 5 ? "재고 있음(소량)" : "재고 있음";
 }
@@ -108,8 +109,8 @@ export function summarizeProduct(product: Product, chart: SizeChart | undefined)
     설명: product.summary_description,
     판매상태: product.selling === "T" ? "판매중" : "판매 중지",
     옵션재고: product.variants.map((v) => ({
-      옵션: v.options.map((o) => `${o.name}=${o.value}`).join(", "),
-      재고: stockLabel(v.quantity, v.selling),
+      옵션: v.options.length ? v.options.map((o) => `${o.name}=${o.value}`).join(", ") : "옵션 없음(사이즈별 재고 정보 없음)",
+      재고: stockLabel(v.quantity, v.selling, v.use_inventory),
     })),
     핏: chart?.fit_note ?? null,
     ...(chart?.length_fit_height && {
@@ -148,9 +149,14 @@ export function createToolHandlers(deps: ToolDeps, scope: ToolScope) {
       const chart = deps.sizeCharts.get(input.product_no);
       if (!chart) throw new Error(`상품번호 ${input.product_no}는 실측표가 등록되어 있지 않습니다.`);
       const product = await deps.cafe24.getProduct(input.product_no);
+      // 사이즈 옵션이 없는 상품(카페24 샘플 상품 등)은 사이즈별 재고를 알 수 없다. 추천에서 빼지 않고, 결과에 모른다고 적는다.
+      const sized = product?.variants.filter((v) => v.options.length > 0) ?? [];
+      const stockUnknown = sized.length === 0;
       const inStock = (size: string) =>
-        product?.variants.some((v) => v.options.some((o) => o.value === size) && v.quantity > 0 && v.selling === "T") ??
-        true;
+        stockUnknown ||
+        sized.some(
+          (v) => v.options.some((o) => o.value === size) && v.selling === "T" && (v.use_inventory === "F" || v.quantity > 0),
+        );
       const result = recommendSize(
         chart,
         {
@@ -166,7 +172,7 @@ export function createToolHandlers(deps: ToolDeps, scope: ToolScope) {
         const section = deps.policies.get(id);
         return section ? [{ id: section.id, text: section.body }] : [];
       });
-      return JSON.stringify({ ...result, 안내_원칙 });
+      return JSON.stringify({ ...result, ...(stockUnknown && { inStock: "사이즈별 재고 정보 없음(상품에 사이즈 옵션이 없음)" }), 안내_원칙 });
     },
 
     async search_policy(input: z.infer<typeof PolicyInput>): Promise<string> {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const CATEGORIES = ["사이즈", "배송", "교환·반품", "주문변경", "상품정보", "재입고", "불량·클레임", "기타"] as const;
+export const CATEGORIES = ["사이즈", "배송", "교환·반품", "주문변경", "상품정보", "재입고", "불량·클레임", "후기", "기타"] as const;
 
 /** submit_draft 도구의 입력 = 에이전트가 제출하는 초안 */
 export const DraftSchema = z.object({
@@ -52,6 +52,8 @@ const PERSONAL_INFO =
 const POST_REQUEST = /(남겨|적어|올려|알려|써|작성해|기재해)\s*(주시면|주세요|주십시오|주시기|주실|주셔야)/;
 const SAFE_CHANNEL =
   /비밀\s*글|1:1|일대일|전화로|이메일로|메일로|마이페이지에서|주문서에|(적지|남기지|쓰지|올리지)\s*마|공개\s*게시판에\s*(적|남기|쓰|올리)지|안내를\s*받(은|으신)\s*(뒤|후)/;
+// 답변에 전화번호가 들어가면 고객이 글에 적은 번호를 공개 댓글로 되풀이했을 수 있다(상품 후기 R08 같은 경우).
+const PHONE_NUMBER = /(?<!\d)0\d{1,2}-?\d{3,4}-?\d{4}(?!\d)/;
 // 고객에게 담당자의 후속 확인·안내를 약속하는 문장. "담당자가"뿐 아니라 "CS팀이"도 본다
 // (실제 경로 14회 1209 "CS팀이 반품 상품의 물류센터 도착 여부를 확인한 뒤 … 이 글에 다시 안내해 드리겠습니다").
 const HANDOFF = /(담당자가|CS\s*팀(이|에서)|CS\s*담당자가)[^.\n]{0,40}(확인|안내|연락)/;
@@ -154,6 +156,7 @@ export function applyGuardrails(draft: DraftOutput, today: Date = new Date()): D
   if (promisesRelativeDate(draft.answer)) reasons.add("[자동] 도착·입고 시점을 약속하는 표현이 있음");
   const promise = draft.answer.match(RESULT_PROMISE)?.[0] ?? acceptanceClaim(draft.answer);
   if (promise) reasons.add(`[자동] 처리 결과를 약속하는 표현이 있음("${promise}"): 담당자가 확인할 내용만 쓰고 결과는 약속하지 말 것`);
+  if (PHONE_NUMBER.test(draft.answer)) reasons.add("[자동] 답변에 전화번호가 있음: 고객이 남긴 개인정보를 공개 글에 되풀이하지 않았는지 확인");
   const info = personalInfoRequest(draft.answer);
   if (info) reasons.add(`[자동] 공개 게시판에 개인정보("${info}")를 남기라고 요청함: 비밀글이나 다른 경로로 받도록 고칠 것`);
   // 답변이 담당자의 후속 안내를 약속하면, 실제로 담당자에게 넘어가야 한다.

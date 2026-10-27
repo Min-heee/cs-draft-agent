@@ -173,6 +173,15 @@ test("공개 게시판에 개인정보를 남기라는 요청을 잡는다", () 
   }
 });
 
+test("답변에 전화번호가 있으면 표시하고, 주문번호·송장번호는 표시하지 않는다", () => {
+  const reasonOf = (answer: string) =>
+    applyGuardrails({ ...base, answer }, TODAY).human_reasons.find((r) => r.includes("전화번호"));
+  assert.ok(reasonOf("남겨 주신 010-0000-0000 번호로 연락드리겠습니다."));
+  assert.ok(reasonOf("01012345678로 연락드릴게요."));
+  assert.equal(reasonOf("주문번호 20261021-0000150과 20261021-0000162를 확인했습니다."), undefined);
+  assert.equal(reasonOf("송장번호는 689412375501입니다."), undefined);
+});
+
 test("담당자 후속 안내를 약속하면 확인 필요를 켠다 (EVAL-CC 1209)", () => {
   const out = applyGuardrails(
     { ...base, answer: "반품 상품의 도착과 검수 진행 상황은 담당자가 확인한 뒤 다시 안내해 드리겠습니다." },

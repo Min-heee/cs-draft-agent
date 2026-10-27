@@ -56,6 +56,7 @@ export function createCafe24Client(config: AppConfig, env: NodeJS.ProcessEnv = p
     clientId: env.CAFE24_CLIENT_ID!,
     clientSecret: env.CAFE24_CLIENT_SECRET!,
     boardNo: Number(env.CAFE24_BOARD_NO),
+    reviewBoardNo: env.CAFE24_REVIEW_BOARD_NO ? Number(env.CAFE24_REVIEW_BOARD_NO) : undefined,
     tokenFile: path.resolve(ROOT, env.CAFE24_TOKEN_FILE ?? "data/cafe24-token.json"),
     replyWriter: env.CAFE24_REPLY_WRITER ?? "CS팀",
     clientIp: env.CAFE24_CLIENT_IP ?? "127.0.0.1",

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -38,15 +39,46 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// 목업은 상품 Q&A 문의 16건과 상품 후기 11건이다.
+const ALL = 27;
+
 test("불러오기는 새 문의만 넣는다", async () => {
-  assert.equal(await pipeline.sync(), 16);
+  assert.equal(await pipeline.sync(), ALL);
   assert.equal(await pipeline.sync(), 0);
+});
+
+test("상품 후기는 종류와 별점이 함께 저장되고, 승인하면 댓글로 등록된다", async () => {
+  await pipeline.sync();
+  const review = store.getInquiry(1302)!;
+  assert.equal(review.kind, "review");
+  assert.equal(review.rating, 2);
+  assert.equal(store.getInquiry(1201)!.kind, "qna");
+  await pipeline.draftPending();
+  const result = await pipeline.review(1302, { decision: "approve", openedAt: Date.now() - 10_000 });
+  assert.equal(result.reply?.status, "posted");
+  assert.equal(cafe24.posted.at(-1)!.article_no, 1302);
+});
+
+test("후기 칸이 없던 예전 DB도 열면 칸이 더해진다", () => {
+  const file = path.join(dir, "old.db");
+  const old = new DatabaseSync(file);
+  old.exec(`CREATE TABLE inquiries (article_no INTEGER PRIMARY KEY, board_no INTEGER NOT NULL, product_no INTEGER,
+    order_id TEXT, member_id TEXT, writer TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL,
+    created_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new', error TEXT, synced_at TEXT NOT NULL)`);
+  old.exec(`INSERT INTO inquiries VALUES (1, 6, NULL, NULL, NULL, 'a', 't', 'c', '2026-10-21', 'new', NULL, '2026-10-21')`);
+  old.close();
+  const migrated = new Store(file);
+  assert.equal(migrated.getInquiry(1)!.kind, "qna");
+  migrated.addInquiries([{ article_no: 2, board_no: 4, product_no: null, order_id: null, member_id: null,
+    writer: "b", title: "t", content: "c", created_date: "2026-10-21", kind: "review", rating: 5 }]);
+  assert.equal(migrated.getInquiry(2)!.rating, 5);
+  migrated.close();
 });
 
 test("초안을 만들고, 그대로 승인하면 카페24에 등록된다", async () => {
   await pipeline.sync();
   await pipeline.draftPending();
-  assert.equal(store.countByStatus().drafted, 16);
+  assert.equal(store.countByStatus().drafted, ALL);
 
   const result = await pipeline.review(1203, { decision: "approve", openedAt: Date.now() - 30_000 });
   assert.equal(result.action, "approve");
@@ -97,7 +129,7 @@ test("초안 작성이 실패하면 오류 상태와 이유가 남는다", async
   pipeline = new Pipeline(store, cafe24, { draft: async () => Promise.reject(new Error("rate limited")) }, 2);
   await pipeline.sync();
   await pipeline.draftPending();
-  assert.equal(store.countByStatus().error, 16);
+  assert.equal(store.countByStatus().error, ALL);
   assert.equal(store.getInquiry(1201)!.error, "rate limited");
 });
 
@@ -114,7 +146,7 @@ test("지표: 승인률, 수정률, 확인 필요 비율", async () => {
   assert.equal(m.rejected, 1);
   assert.ok(Math.abs(m.asIsRate! - 1 / 3) < 1e-9);
   assert.ok(m.medianReviewSeconds! >= 39 && m.medianReviewSeconds! < 45);
-  assert.ok(Math.abs(m.humanFlagRate! - 1 / 16) < 1e-9);
+  assert.ok(Math.abs(m.humanFlagRate! - 1 / ALL) < 1e-9);
   assert.ok(m.savedMinutes! > 0);
 });
 
@@ -150,4 +182,15 @@ test("화면: 문의함과 검토 화면이 뜨고, 고객 글의 HTML은 이스
 
   const metrics = await app.request("/metrics");
   assert.equal(metrics.status, 200);
+});
+
+test("화면: 상품 후기에는 별점 칩과 '승인하고 댓글 등록' 버튼이 보인다", async () => {
+  await pipeline.sync();
+  await pipeline.draftPending();
+  const app = createApp({ store, pipeline, modeLabel: "테스트", baselineMinutes: null });
+  const inbox = await (await app.request("/inbox")).text();
+  assert.ok(inbox.includes("후기 ★★"));
+  const page = await (await app.request("/inquiries/1302")).text();
+  assert.ok(page.includes("승인하고 댓글 등록"));
+  assert.ok(!(await (await app.request("/inquiries/1201")).text()).includes("댓글 등록"));
 });

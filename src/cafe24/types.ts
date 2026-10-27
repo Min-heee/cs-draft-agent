@@ -2,7 +2,7 @@
 // 필드 이름은 API 응답과 같게 두어서 목업 데이터와 실제 API를 바꿔 끼울 수 있게 한다.
 // 참고: https://apidocs.cafe24.com/en/docs/admin/
 
-/** GET /admin/boards/{board_no}/articles 의 글 하나 (상품 Q&A) */
+/** GET /admin/boards/{board_no}/articles 의 글 하나 (상품 Q&A 문의 또는 상품 후기) */
 export interface Inquiry {
   article_no: number;
   board_no: number;
@@ -13,6 +13,14 @@ export interface Inquiry {
   title: string;
   content: string;
   created_date: string;
+  /** qna: 상품 Q&A 문의(답글로 답함), review: 상품 후기(댓글로 답함). 없으면 qna. */
+  kind?: "qna" | "review";
+  /** 상품 후기의 별점(1~5). 문의에는 없다. */
+  rating?: number | null;
+}
+
+export function isReview(inquiry: Pick<Inquiry, "kind">): boolean {
+  return inquiry.kind === "review";
 }
 
 /** GET /admin/orders/{order_id}?embed=items 의 items[] */
@@ -55,9 +63,12 @@ export interface Order {
 /** GET /admin/products/{product_no}/variants?embed=inventories 의 variants[] */
 export interface Variant {
   variant_code: string;
+  /** 옵션이 없는 상품은 API가 null을 준다. 클라이언트가 빈 배열로 바꿔 둔다. */
   options: { name: string; value: string }[];
   selling: "T" | "F";
   quantity: number;
+  /** F면 재고를 세지 않는 상품이라 quantity가 0이어도 품절이 아니다. */
+  use_inventory?: "T" | "F";
 }
 
 /** GET /admin/products/{product_no} (+ variants) */
@@ -80,7 +91,10 @@ export interface ReplyResult {
 export interface Cafe24Client {
   /** 상품 Q&A 게시판에서 아직 답하지 않은(reply_status=N) 글 */
   listUnansweredInquiries(): Promise<Inquiry[]>;
+  /** 상품 후기 게시판의 최근 후기(kind=review). 이미 가져온 후기는 저장할 때 걸러진다. */
+  listNewReviews(): Promise<Inquiry[]>;
   getOrder(orderId: string): Promise<Order | null>;
   getProduct(productNo: number): Promise<Product | null>;
+  /** 문의에는 답글로, 후기에는 댓글로 등록한다. */
   postReply(inquiry: Inquiry, content: string): Promise<ReplyResult>;
 }

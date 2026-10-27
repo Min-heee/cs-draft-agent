@@ -1,6 +1,12 @@
 import { html } from "hono/html";
 import type { DraftRow, InquiryRow, ReplyRow, ReviewRow } from "./db.ts";
 import { draftCostUsd, type Metrics } from "./metrics.ts";
+import { isReview } from "./cafe24/types.ts";
+
+/** 상품 후기면 "후기 ★4" 칩, 문의면 아무것도 붙이지 않는다. */
+function kindChip(q: InquiryRow) {
+  return isReview(q) ? html`<span class="chip">후기 ${"★".repeat(q.rating ?? 0) || "별점 없음"}</span>` : "";
+}
 
 // 화면은 서버에서 HTML로 그린다. html`` 은 끼워 넣는 값을 자동으로 이스케이프한다.
 
@@ -178,7 +184,7 @@ ${
   <a class="card row" href="/inquiries/${q.article_no}">
     <div class="no">#${q.article_no}</div>
     <div>
-      <div>${draft ? html`<span class="chip">${draft.category}</span>` : ""}<span class="title">${q.title}</span></div>
+      <div>${kindChip(q)}${draft ? html`<span class="chip">${draft.category}</span>` : ""}<span class="title">${q.title}</span></div>
       <div class="snippet">${q.status === "error" ? q.error : q.content}</div>
     </div>
     <div class="meta">${statusChip(q, draft, review)}<br>${q.writer} · ${formatDate(q.created_date)}</div>
@@ -229,6 +235,7 @@ export function detailPage(
     <div class="muted small">#${q.article_no} · ${q.writer} · ${formatDate(q.created_date)}</div>
     <h1>${q.title}</h1>
     <div>
+      ${kindChip(q)}
       ${q.product_no ? html`<span class="chip">상품 ${q.product_no}</span>` : ""}
       ${q.order_id ? html`<span class="chip">주문 ${q.order_id}</span>` : ""}
     </div>
@@ -267,7 +274,7 @@ export function detailPage(
     <input type="hidden" name="opened_at" value="${openedAt}">
     <textarea name="answer" aria-label="답변">${draft.answer}</textarea>
     <div class="actions">
-      <button class="primary" name="decision" value="approve">승인하고 등록</button>
+      <button class="primary" name="decision" value="approve">${isReview(q) ? "승인하고 댓글 등록" : "승인하고 등록"}</button>
       <span class="muted small">고친 내용은 "수정 후 승인"으로 기록됩니다.</span>
     </div>
   </form>

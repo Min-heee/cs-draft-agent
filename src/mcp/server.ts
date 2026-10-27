@@ -97,6 +97,8 @@ export function createMcpServer(deps: ToolDeps, options: McpOptions): McpServer 
         created_date: q.created_date,
         product_no: q.product_no,
         order_id: q.order_id,
+        kind: q.kind,
+        rating: q.rating,
       }));
       return rows.length ? JSON.stringify(rows) : "해당하는 문의가 없습니다.";
     }),

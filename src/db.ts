@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS inquiries (
   title        TEXT NOT NULL,
   content      TEXT NOT NULL,
   created_date TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'qna',
+  rating       INTEGER,
   status       TEXT NOT NULL DEFAULT 'new',
   error        TEXT,
   synced_at    TEXT NOT NULL
@@ -138,19 +140,23 @@ export class Store {
     this.db = new DatabaseSync(file);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
     this.db.exec(SCHEMA);
+    // 상품 후기를 받기 전에 만든 DB에는 kind·rating 칸이 없다.
+    const columns = new Set(this.db.prepare("PRAGMA table_info(inquiries)").all().map((c) => c.name as string));
+    if (!columns.has("kind")) this.db.exec("ALTER TABLE inquiries ADD COLUMN kind TEXT NOT NULL DEFAULT 'qna'");
+    if (!columns.has("rating")) this.db.exec("ALTER TABLE inquiries ADD COLUMN rating INTEGER");
   }
 
   /** 새 문의만 넣는다. 이미 있는 문의는 상태를 건드리지 않는다. 새로 들어온 수를 돌려준다. */
   addInquiries(inquiries: Inquiry[]): number {
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO inquiries
-        (article_no, board_no, product_no, order_id, member_id, writer, title, content, created_date, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        (article_no, board_no, product_no, order_id, member_id, writer, title, content, created_date, kind, rating, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     let added = 0;
     for (const q of inquiries) {
       const result = insert.run(
         q.article_no, q.board_no, q.product_no, q.order_id, q.member_id,
-        q.writer, q.title, q.content, q.created_date, now(),
+        q.writer, q.title, q.content, q.created_date, q.kind ?? "qna", q.rating ?? null, now(),
       );
       added += Number(result.changes);
     }

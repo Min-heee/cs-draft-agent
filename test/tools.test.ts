@@ -3,7 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { buildTools } from "../src/agent/tools.ts";
 import { MockCafe24Client } from "../src/cafe24/mock.ts";
-import type { Inquiry } from "../src/cafe24/types.ts";
+import type { Cafe24Client, Inquiry } from "../src/cafe24/types.ts";
 import { ROOT } from "../src/config.ts";
 import type { TraceEntry } from "../src/db.ts";
 import { PolicyStore } from "../src/knowledge/policies.ts";
@@ -84,4 +84,29 @@ test("recommend_size는 사이즈 상담 원칙과 첫 사이즈 교환 무료 �
 test("search_policy는 섹션 ID를 돌려준다", async () => {
   const out = JSON.parse(String(await tool("x", "search_policy").run({ query: "기장 수선" })));
   assert.equal(out[0].id, "size-guide#기장 수선 서비스");
+});
+
+test("사이즈 옵션이 없고 재고를 세지 않는 상품: 품절로 보지 않고, 사이즈별 재고는 모른다고 적는다 (bh044 샘플 상품)", async () => {
+  const { createToolHandlers } = await import("../src/agent/tools.ts");
+  const product = {
+    product_no: 35, product_name: "릴렉스 무지 오버핏 셔츠", price: "54000.00", selling: "T" as const, sold_out: "F" as const,
+    summary_description: "", product_material: "",
+    variants: [{ variant_code: "P00000BJ000A", options: [], selling: "T" as const, quantity: 0, use_inventory: "F" as const }],
+  };
+  const cafe24: Cafe24Client = {
+    listUnansweredInquiries: async () => [],
+    listNewReviews: async () => [],
+    getProduct: async () => product,
+    getOrder: async () => null,
+    postReply: async () => ({ remote_id: "x" }),
+  };
+  const h = createToolHandlers({ ...deps, cafe24 }, { memberId: null });
+  const summary = JSON.parse(await h.get_product({ product_no: 35 }));
+  assert.equal(summary.옵션재고[0].재고, "판매중(재고 수량을 관리하지 않는 상품)");
+  assert.match(summary.옵션재고[0].옵션, /옵션 없음/);
+  // 35번에는 101번 실측표를 복사해 두었다
+  const rec = JSON.parse(await h.recommend_size({ product_no: 35, height_cm: 178, weight_kg: 105, usual_size: "3XL" }));
+  assert.equal(rec.recommended, "3XL");
+  assert.match(rec.inStock, /사이즈별 재고 정보 없음/);
+  await assert.rejects(h.get_order({ order_id: "20261021-0000150" }), /찾을 수 없습니다/);
 });
