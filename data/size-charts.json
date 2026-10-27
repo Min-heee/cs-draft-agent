@@ -1,0 +1,80 @@
+{
+  "_comment": "기획MD가 관리하는 실측표. 운영에서는 구글시트가 단일 출처이고, 이 파일은 그 내보내기본이다. 단위 cm, 모든 값은 단면 기준. 바지의 length_fit_height는 기본 기장(총장)이 수선 없이 맞는 키 범위다.",
+  "charts": [
+    {
+      "product_no": 101,
+      "kind": "top",
+      "fit_note": "어깨선이 내려간 오버핏. 평소 입는 사이즈 그대로 고르면 여유 있게 맞는다.",
+      "sizes": [
+        { "size": "XL", "height": [170, 180], "weight": [80, 90], "measurements": { "shoulder": 54, "chest": 65, "sleeve": 60, "length": 78 } },
+        { "size": "2XL", "height": [172, 182], "weight": [88, 100], "measurements": { "shoulder": 56, "chest": 68, "sleeve": 61, "length": 80 } },
+        { "size": "3XL", "height": [174, 185], "weight": [98, 110], "measurements": { "shoulder": 58, "chest": 71, "sleeve": 62, "length": 82 } },
+        { "size": "4XL", "height": [175, 188], "weight": [108, 122], "measurements": { "shoulder": 60, "chest": 74, "sleeve": 63, "length": 84 } },
+        { "size": "5XL", "height": [176, 190], "weight": [120, 135], "measurements": { "shoulder": 62, "chest": 77, "sleeve": 64, "length": 86 } }
+      ]
+    },
+    {
+      "product_no": 102,
+      "kind": "bottom",
+      "fit_note": "허리 원턱 와이드핏. 허벅지와 엉덩이가 넉넉하다. 기장 무료 수선 가능.",
+      "length_fit_height": [175, 182],
+      "sizes": [
+        { "size": "34", "height": [165, 190], "weight": [80, 90], "measurements": { "waist": 43.2, "hip": 58, "thigh": 37, "rise": 33, "hem": 25, "length": 105 } },
+        { "size": "36", "height": [165, 190], "weight": [88, 98], "measurements": { "waist": 45.7, "hip": 60, "thigh": 38, "rise": 33.5, "hem": 25.5, "length": 105 } },
+        { "size": "38", "height": [165, 190], "weight": [95, 105], "measurements": { "waist": 48.3, "hip": 62, "thigh": 39.5, "rise": 34, "hem": 26, "length": 106 } },
+        { "size": "40", "height": [165, 190], "weight": [103, 113], "measurements": { "waist": 50.8, "hip": 64, "thigh": 41, "rise": 34.5, "hem": 26.5, "length": 106 } },
+        { "size": "42", "height": [165, 190], "weight": [110, 120], "measurements": { "waist": 53.3, "hip": 66, "thigh": 42.5, "rise": 35, "hem": 27, "length": 107 } },
+        { "size": "44", "height": [165, 190], "weight": [118, 128], "measurements": { "waist": 55.9, "hip": 68, "thigh": 44, "rise": 35.5, "hem": 27.5, "length": 107 } },
+        { "size": "46", "height": [165, 190], "weight": [125, 140], "measurements": { "waist": 58.4, "hip": 70, "thigh": 45.5, "rise": 36, "hem": 28, "length": 108 } }
+      ]
+    },
+    {
+      "product_no": 103,
+      "kind": "top",
+      "fit_note": "박스핏 헤비 코튼. 총장이 짧은 편이라 키가 크면 한 사이즈 크게 고르는 경우가 많다.",
+      "sizes": [
+        { "size": "XL", "height": [170, 180], "weight": [80, 90], "measurements": { "shoulder": 55, "chest": 62, "sleeve": 24, "length": 74 } },
+        { "size": "2XL", "height": [172, 182], "weight": [88, 100], "measurements": { "shoulder": 57, "chest": 65, "sleeve": 25, "length": 76 } },
+        { "size": "3XL", "height": [174, 185], "weight": [98, 110], "measurements": { "shoulder": 59, "chest": 68, "sleeve": 26, "length": 78 } },
+        { "size": "4XL", "height": [175, 188], "weight": [108, 122], "measurements": { "shoulder": 61, "chest": 71, "sleeve": 27, "length": 80 } },
+        { "size": "5XL", "height": [176, 190], "weight": [120, 135], "measurements": { "shoulder": 63, "chest": 74, "sleeve": 28, "length": 82 } }
+      ]
+    },
+    {
+      "product_no": 104,
+      "kind": "bottom",
+      "fit_note": "스판 2% 세미와이드 데님. 허벅지가 다른 바지보다 조금 좁다. 기장 수선 대상 아님.",
+      "length_fit_height": [174, 181],
+      "sizes": [
+        { "size": "34", "height": [165, 188], "weight": [80, 90], "measurements": { "waist": 43, "hip": 56, "thigh": 35, "rise": 31, "hem": 24, "length": 104 } },
+        { "size": "36", "height": [165, 188], "weight": [88, 98], "measurements": { "waist": 45.5, "hip": 58, "thigh": 36, "rise": 31.5, "hem": 24.5, "length": 104 } },
+        { "size": "38", "height": [165, 188], "weight": [95, 105], "measurements": { "waist": 48, "hip": 60, "thigh": 37.5, "rise": 32, "hem": 25, "length": 105 } },
+        { "size": "40", "height": [165, 188], "weight": [103, 113], "measurements": { "waist": 50.5, "hip": 62, "thigh": 39, "rise": 32.5, "hem": 25.5, "length": 105 } },
+        { "size": "42", "height": [165, 188], "weight": [110, 120], "measurements": { "waist": 53, "hip": 64, "thigh": 40.5, "rise": 33, "hem": 26, "length": 106 } },
+        { "size": "44", "height": [165, 188], "weight": [118, 128], "measurements": { "waist": 55.5, "hip": 66, "thigh": 42, "rise": 33.5, "hem": 26.5, "length": 106 } }
+      ]
+    },
+    {
+      "product_no": 105,
+      "kind": "top",
+      "fit_note": "레귤러핏 니트 가디건. 이너를 두껍게 입을 거면 한 사이즈 크게.",
+      "sizes": [
+        { "size": "XL", "height": [170, 180], "weight": [80, 90], "measurements": { "shoulder": 52, "chest": 63, "sleeve": 60, "length": 72 } },
+        { "size": "2XL", "height": [172, 182], "weight": [88, 100], "measurements": { "shoulder": 54, "chest": 66, "sleeve": 61, "length": 74 } },
+        { "size": "3XL", "height": [174, 185], "weight": [98, 110], "measurements": { "shoulder": 56, "chest": 69, "sleeve": 62, "length": 76 } },
+        { "size": "4XL", "height": [175, 188], "weight": [108, 122], "measurements": { "shoulder": 58, "chest": 72, "sleeve": 63, "length": 78 } }
+      ]
+    },
+    {
+      "product_no": 106,
+      "kind": "top",
+      "fit_note": "울 혼방 싱글 코트, 레귤러핏. 니트 위에 입을 것을 고려해 가슴이 넉넉하다.",
+      "sizes": [
+        { "size": "XL", "height": [170, 180], "weight": [80, 90], "measurements": { "shoulder": 50, "chest": 64, "sleeve": 64, "length": 108 } },
+        { "size": "2XL", "height": [172, 182], "weight": [88, 100], "measurements": { "shoulder": 52, "chest": 67, "sleeve": 65, "length": 110 } },
+        { "size": "3XL", "height": [174, 185], "weight": [98, 110], "measurements": { "shoulder": 54, "chest": 70, "sleeve": 66, "length": 112 } },
+        { "size": "4XL", "height": [175, 188], "weight": [108, 122], "measurements": { "shoulder": 56, "chest": 73, "sleeve": 67, "length": 114 } }
+      ]
+    }
+  ]
+}

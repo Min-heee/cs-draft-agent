@@ -1,0 +1,6 @@
+node_modules/
+.env
+data/*.db
+data/*.db-*
+data/cafe24-token.json
+data/*.log

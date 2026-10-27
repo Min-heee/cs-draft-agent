@@ -1,0 +1,33 @@
+{
+  "name": "cs-draft-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "쇼핑몰 CS 문의 답변 초안 에이전트 (사람 승인 후 등록)",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/cli.ts serve",
+    "start:fake": "DRAFTER=fake DB_FILE=data/fake.db node --env-file-if-exists=.env src/cli.ts serve",
+    "start:claude-code": "DRAFTER=claude-code node --env-file-if-exists=.env src/cli.ts serve",
+    "sync": "node --env-file-if-exists=.env src/cli.ts sync",
+    "draft": "node --env-file-if-exists=.env src/cli.ts draft",
+    "reset": "node --env-file-if-exists=.env src/cli.ts reset",
+    "export": "node --env-file-if-exists=.env scripts/export-drafts.ts",
+    "mcp": "node --env-file-if-exists=.env src/mcp/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.137.0",
+    "@hono/node-server": "^2.1.5",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "hono": "^4.13.13",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "products": [
+    {
+      "product_no": 101,
+      "product_name": "빅사이즈 오버핏 옥스포드 셔츠",
+      "price": "49000.00",
+      "selling": "T",
+      "sold_out": "F",
+      "summary_description": "덩치 체형을 위한 드롭 숄더 오버핏 옥스포드 셔츠",
+      "product_material": "면 100%",
+      "variants": [
+        { "variant_code": "P000000B000A", "options": [{ "name": "사이즈", "value": "XL" }],  "selling": "T", "quantity": 14 },
+        { "variant_code": "P000000B000B", "options": [{ "name": "사이즈", "value": "2XL" }], "selling": "T", "quantity": 22 },
+        { "variant_code": "P000000B000C", "options": [{ "name": "사이즈", "value": "3XL" }], "selling": "T", "quantity": 18 },
+        { "variant_code": "P000000B000D", "options": [{ "name": "사이즈", "value": "4XL" }], "selling": "T", "quantity": 9 },
+        { "variant_code": "P000000B000E", "options": [{ "name": "사이즈", "value": "5XL" }], "selling": "T", "quantity": 4 }
+      ]
+    },
+    {
+      "product_no": 102,
+      "product_name": "와이드 원턱 슬랙스",
+      "price": "59000.00",
+      "selling": "T",
+      "sold_out": "F",
+      "summary_description": "허벅지와 엉덩이가 넉넉한 원턱 와이드 슬랙스. 기장 무료 수선",
+      "product_material": "폴리에스터 65%, 레이온 32%, 폴리우레탄 3%",
+      "variants": [
+        { "variant_code": "P000000C000A", "options": [{ "name": "사이즈", "value": "34" }], "selling": "T", "quantity": 11 },
+        { "variant_code": "P000000C000B", "options": [{ "name": "사이즈", "value": "36" }], "selling": "T", "quantity": 16 },
+        { "variant_code": "P000000C000C", "options": [{ "name": "사이즈", "value": "38" }], "selling": "T", "quantity": 20 },
+        { "variant_code": "P000000C000D", "options": [{ "name": "사이즈", "value": "40" }], "selling": "T", "quantity": 17 },
+        { "variant_code": "P000000C000E", "options": [{ "name": "사이즈", "value": "42" }], "selling": "T", "quantity": 8 },
+        { "variant_code": "P000000C000F", "options": [{ "name": "사이즈", "value": "44" }], "selling": "T", "quantity": 5 },
+        { "variant_code": "P000000C000G", "options": [{ "name": "사이즈", "value": "46" }], "selling": "T", "quantity": 2 }
+      ]
+    },
+    {
+      "product_no": 103,
+      "product_name": "헤비 코튼 박스핏 반팔 티셔츠",
+      "price": "29000.00",
+      "selling": "T",
+      "sold_out": "F",
+      "summary_description": "워싱 가공으로 수축을 줄인 20수 헤비 코튼 티셔츠",
+      "product_material": "면 100%",
+      "variants": [
+        { "variant_code": "P000000D000A", "options": [{ "name": "사이즈", "value": "XL" }],  "selling": "T", "quantity": 30 },
+        { "variant_code": "P000000D000B", "options": [{ "name": "사이즈", "value": "2XL" }], "selling": "T", "quantity": 41 },
+        { "variant_code": "P000000D000C", "options": [{ "name": "사이즈", "value": "3XL" }], "selling": "T", "quantity": 35 },
+        { "variant_code": "P000000D000D", "options": [{ "name": "사이즈", "value": "4XL" }], "selling": "T", "quantity": 19 },
+        { "variant_code": "P000000D000E", "options": [{ "name": "사이즈", "value": "5XL" }], "selling": "T", "quantity": 7 }
+      ]
+    },
+    {
+      "product_no": 104,
+      "product_name": "스트레치 세미와이드 데님",
+      "price": "69000.00",
+      "selling": "T",
+      "sold_out": "F",
+      "summary_description": "스판 2%가 들어간 세미와이드 데님",
+      "product_material": "면 98%, 폴리우레탄 2%",
+      "variants": [
+        { "variant_code": "P000000E000A", "options": [{ "name": "사이즈", "value": "34" }], "selling": "T", "quantity": 6 },
+        { "variant_code": "P000000E000B", "options": [{ "name": "사이즈", "value": "36" }], "selling": "T", "quantity": 12 },
+        { "variant_code": "P000000E000C", "options": [{ "name": "사이즈", "value": "38" }], "selling": "T", "quantity": 9 },
+        { "variant_code": "P000000E000D", "options": [{ "name": "사이즈", "value": "40" }], "selling": "T", "quantity": 7 },
+        { "variant_code": "P000000E000E", "options": [{ "name": "사이즈", "value": "42" }], "selling": "T", "quantity": 3 },
+        { "variant_code": "P000000E000F", "options": [{ "name": "사이즈", "value": "44" }], "selling": "T", "quantity": 0 }
+      ]
+    },
+    {
+      "product_no": 105,
+      "product_name": "울 블렌드 니트 가디건",
+      "price": "79000.00",
+      "selling": "T",
+      "sold_out": "F",
+      "summary_description": "이너 위에 걸치기 좋은 레귤러핏 니트 가디건",
+      "product_material": "울 30%, 아크릴 70%",
+      "variants": [
+        { "variant_code": "P000000F000A", "options": [{ "name": "사이즈", "value": "XL" }],  "selling": "T", "quantity": 5 },
+        { "variant_code": "P000000F000B", "options": [{ "name": "사이즈", "value": "2XL" }], "selling": "T", "quantity": 8 },
+        { "variant_code": "P000000F000C", "options": [{ "name": "사이즈", "value": "3XL" }], "selling": "T", "quantity": 3 },
+        { "variant_code": "P000000F000D", "options": [{ "name": "사이즈", "value": "4XL" }], "selling": "T", "quantity": 0 }
+      ]
+    },
+    {
+      "product_no": 106,
+      "product_name": "울 블렌드 싱글 코트",
+      "price": "189000.00",
+      "selling": "T",
+      "sold_out": "F",
+      "summary_description": "니트 위에 입기 좋은 레귤러핏 싱글 코트",
+      "product_material": "울 60%, 폴리에스터 40%",
+      "variants": [
+        { "variant_code": "P000000G000A", "options": [{ "name": "사이즈", "value": "XL" }],  "selling": "T", "quantity": 4 },
+        { "variant_code": "P000000G000B", "options": [{ "name": "사이즈", "value": "2XL" }], "selling": "T", "quantity": 6 },
+        { "variant_code": "P000000G000C", "options": [{ "name": "사이즈", "value": "3XL" }], "selling": "T", "quantity": 5 },
+        { "variant_code": "P000000G000D", "options": [{ "name": "사이즈", "value": "4XL" }], "selling": "T", "quantity": 2 }
+      ]
+    }
+  ]
+}
