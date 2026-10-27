@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { FakeDrafter } from "../src/agent/drafter.ts";
 import { MockCafe24Client } from "../src/cafe24/mock.ts";
+import { commentKey } from "../src/cafe24/types.ts";
 import { ROOT } from "../src/config.ts";
 import { Store } from "../src/db.ts";
 import { computeMetrics } from "../src/metrics.ts";
@@ -39,8 +40,9 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-// 목업은 상품 Q&A 문의 16건과 상품 후기 11건이다.
-const ALL = 27;
+// 목업은 상품 Q&A 문의 16건, 상품 후기 11건, 고객 댓글 3건이다.
+const ALL = 30;
+const COMMENT = commentKey(4, 1); // 후기 1301에 다른 고객이 단 사이즈 질문
 
 test("불러오기는 새 문의만 넣는다", async () => {
   assert.equal(await pipeline.sync(), ALL);
@@ -72,7 +74,104 @@ test("후기 칸이 없던 예전 DB도 열면 칸이 더해진다", () => {
   migrated.addInquiries([{ article_no: 2, board_no: 4, product_no: null, order_id: null, member_id: null,
     writer: "b", title: "t", content: "c", created_date: "2026-10-21", kind: "review", rating: 5 }]);
   assert.equal(migrated.getInquiry(2)!.rating, 5);
+  migrated.addInquiries([{ article_no: commentKey(4, 9), board_no: 4, product_no: null, order_id: null, member_id: null,
+    writer: "c", title: "t", content: "댓글", created_date: "2026-10-21", kind: "comment", comment_no: 9, parent_article_no: 2, thread: "원글" }]);
+  assert.equal(migrated.getInquiry(commentKey(4, 9))!.thread, "원글");
+  assert.equal(migrated.addNotification({ article_no: 2, type: "arrived", message: "새 후기" }), 1);
   migrated.close();
+});
+
+test("고객 댓글은 댓글이 달린 글과 함께 저장되고, 승인하면 그 댓글 아래로 등록된다", async () => {
+  await pipeline.sync();
+  const q = store.getInquiry(COMMENT)!;
+  assert.equal(q.kind, "comment");
+  assert.equal(q.parent_article_no, 1301);
+  assert.equal(q.comment_no, 1);
+  assert.equal(q.product_no, 104); // 댓글이 달린 후기의 상품
+  assert.match(q.thread!, /원글 · 덩치\* · 허벅지 편해요/);
+  assert.equal(q.title, "허벅지 편해요");
+  await pipeline.draftPending();
+  const result = await pipeline.review(COMMENT, { decision: "approve", openedAt: Date.now() });
+  assert.equal(result.reply?.status, "posted");
+  assert.equal(cafe24.posted.at(-1)!.article_no, COMMENT);
+  // 다시 불러와도 같은 댓글은 새로 들어오지 않는다.
+  assert.equal(await pipeline.sync(), 0);
+});
+
+test("알림: 새 글, 초안 준비, 확인 필요, 등록 완료가 차례로 남는다", async () => {
+  await pipeline.sync();
+  const arrived = store.notificationsAfter(0, 100);
+  assert.equal(arrived.length, ALL);
+  assert.ok(arrived.every((n) => n.type === "arrived"));
+  assert.ok(arrived.some((n) => n.message.startsWith("새 후기 ★2 · ")));
+  assert.ok(arrived.some((n) => n.message.startsWith("새 댓글 · 저도 175에 105kg")));
+
+  const last = store.lastNotificationId();
+  await pipeline.draftPending();
+  const drafted = store.notificationsAfter(last, 100);
+  assert.equal(drafted.length, ALL);
+  assert.deepEqual(drafted.filter((n) => n.type === "needs_human").map((n) => n.article_no), [1207]);
+
+  await pipeline.review(1203, { decision: "approve", openedAt: Date.now() });
+  assert.equal(store.recentNotifications(1)[0].type, "posted");
+  // 글 하나에 알림이 셋(새 글·초안 준비·등록 완료) 있어도 읽지 않은 글은 하나로 센다.
+  assert.equal(store.unreadCount(), ALL);
+  store.markNotificationsRead(1203);
+  assert.equal(store.unreadCount(), ALL - 1);
+  assert.ok(!store.unreadArticles().has(1203));
+  store.addNotification({ article_no: null, type: "sync_failed", message: "새 글 확인 실패 · 401" });
+  store.addNotification({ article_no: null, type: "sync_failed", message: "새 글 확인 실패 · 500" });
+  assert.equal(store.unreadCount(), ALL + 1);
+  store.markNotificationsRead();
+  assert.equal(store.unreadCount(), 0);
+});
+
+test("셋 중 하나가 실패해도 가져온 글은 저장하고, 실패를 SyncError로 알린다", async () => {
+  cafe24.listNewComments = async () => {
+    throw new Error("카페24 API 503: Service Unavailable");
+  };
+  const { SyncError } = await import("../src/pipeline.ts");
+  await assert.rejects(() => pipeline.sync(), (e: unknown) => e instanceof SyncError && e.added === 27 && /503/.test(e.message));
+  assert.equal(store.countByStatus().new, 27);
+  assert.ok(store.getInquiry(1201) && store.getInquiry(1301) && !store.getInquiry(COMMENT));
+});
+
+test("댓글 목록이 일부만 실패하면 그 전에 찾은 댓글도 저장한다", async () => {
+  const { PartialListError } = await import("../src/cafe24/types.ts");
+  const comments = await cafe24.listNewComments();
+  cafe24.listNewComments = async () => {
+    throw new PartialListError("게시판 4 댓글: 500", comments.slice(0, 1));
+  };
+  await assert.rejects(() => pipeline.sync(), /게시판 4 댓글: 500/);
+  assert.equal(store.countByStatus().new, 28); // 문의 16 + 후기 11 + 댓글 1
+  assert.ok(store.getInquiry(COMMENT));
+});
+
+test("화면: DB를 새로 만들어 알림 번호가 줄면 /api/live가 처음부터 다시 준다", async () => {
+  await pipeline.sync();
+  const app = createApp({ store, pipeline, modeLabel: "테스트", baselineMinutes: null });
+  const live = (await (await app.request("/api/live?after=999")).json()) as { reset: boolean; lastId: number; notifications: unknown[] };
+  assert.equal(live.reset, true);
+  assert.equal(live.notifications.length, ALL);
+  assert.equal(live.lastId, ALL);
+  const normal = (await (await app.request(`/api/live?after=${ALL}&db=${store.dbId}`)).json()) as { reset: boolean; notifications: unknown[] };
+  assert.equal(normal.reset, false);
+  assert.equal(normal.notifications.length, 0);
+  // 번호가 같아도 DB가 바뀌었으면 처음부터 다시 준다.
+  const other = (await (await app.request(`/api/live?after=${ALL}&db=old-db`)).json()) as { reset: boolean; dbId: string; notifications: unknown[] };
+  assert.equal(other.reset, true);
+  assert.equal(other.dbId, store.dbId);
+  assert.equal(other.notifications.length, ALL);
+});
+
+test("목업 시연 모드(MOCK_DRIP)는 확인할 때마다 작성 순서대로 조금씩 내놓는다", async () => {
+  pipeline = new Pipeline(store, new MockCafe24Client(path.join(ROOT, "data/mock"), { drip: 2 }), goodDraft, 3);
+  assert.equal(await pipeline.sync(), 2);
+  assert.ok(store.getInquiry(1201) && store.getInquiry(1202)); // 가장 먼저 쓴 두 문의
+  assert.equal(await pipeline.sync(), 2);
+  let total = 4;
+  for (let added = await pipeline.sync(); added > 0; added = await pipeline.sync()) total += added;
+  assert.equal(total, ALL);
 });
 
 test("초안을 만들고, 그대로 승인하면 카페24에 등록된다", async () => {
@@ -163,6 +262,7 @@ test("화면: 문의함과 검토 화면이 뜨고, 고객 글의 HTML은 이스
 
   const inbox = await (await app.request("/inbox")).text();
   assert.ok(inbox.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
+  assert.ok(inbox.includes(".table > * + *") && inbox.includes('"Apple SD Gothic Neo"')); // CSS는 그대로 들어간다
   assert.ok(!inbox.includes("<script>alert(1)"));
 
   const detail = await app.request("/inquiries/9001");
@@ -182,6 +282,62 @@ test("화면: 문의함과 검토 화면이 뜨고, 고객 글의 HTML은 이스
 
   const metrics = await app.request("/metrics");
   assert.equal(metrics.status, 200);
+});
+
+test("화면: 고객 댓글은 댓글이 달린 글을 함께 보여 주고, 종류로 거를 수 있다", async () => {
+  await pipeline.sync();
+  await pipeline.draftPending();
+  const app = createApp({ store, pipeline, modeLabel: "테스트", baselineMinutes: null });
+  const page = await (await app.request(`/inquiries/${COMMENT}`)).text();
+  assert.ok(page.includes("댓글이 달린 글"));
+  assert.ok(page.includes("#1301 글에 달린 댓글"));
+  assert.ok(page.includes("승인하고 댓글 등록"));
+  const comments = await (await app.request("/inbox?tab=review&kind=comment")).text();
+  assert.equal(comments.match(/role="listitem"/g)?.length, 3);
+  assert.equal(comments.match(/chip kind-comment/g)?.length, 3);
+  assert.ok(!comments.includes("chip kind-review"));
+});
+
+test("화면: /api/live는 새 알림만 주고, 글을 열면 그 글의 알림이 읽음이 된다", async () => {
+  await pipeline.sync();
+  const app = createApp({ store, pipeline, modeLabel: "테스트", baselineMinutes: null });
+  const first = (await (await app.request("/api/live?after=0")).json()) as {
+    lastId: number; notifications: { article_no: number; link: string }[]; unread: number; counts: Record<string, number>;
+    watch: { text: string; tone: string };
+  };
+  assert.equal(first.notifications.length, ALL);
+  assert.equal(first.unread, ALL);
+  assert.equal(first.counts.working, ALL);
+  assert.equal(first.watch.tone, "off");
+  assert.ok(first.notifications.some((n) => n.link === `/inquiries/${COMMENT}`));
+
+  const again = (await (await app.request(`/api/live?after=${first.lastId}`)).json()) as { lastId: number; notifications: unknown[] };
+  assert.equal(again.notifications.length, 0);
+  assert.equal(again.lastId, first.lastId);
+
+  await app.request("/inquiries/1201");
+  const after = (await (await app.request(`/api/live?after=${first.lastId}`)).json()) as { unread: number };
+  assert.equal(after.unread, ALL - 1);
+
+  const res = await app.request("/notifications/read", { method: "POST", headers: { Accept: "application/json" } });
+  assert.equal(res.status, 200);
+  assert.equal(store.unreadCount(), 0);
+});
+
+test("화면: 목록 조각, 알림 화면, 화면 스크립트가 뜬다", async () => {
+  await pipeline.sync();
+  const app = createApp({ store, pipeline, modeLabel: "테스트", baselineMinutes: null });
+  const fragment = await (await app.request("/inbox?tab=working&fragment=1")).text();
+  assert.ok(!fragment.includes("<html"));
+  assert.ok(fragment.includes(`전체<span class="n">${ALL}</span>`)); // 종류별 개수도 같이 새로 받는다
+  assert.equal(fragment.match(/role="listitem"/g)?.length, ALL);
+  assert.ok(fragment.includes('class="new-dot"'));
+  const notifications = await app.request("/notifications");
+  assert.equal(notifications.status, 200);
+  assert.ok((await notifications.text()).includes("새 후기 ★2"));
+  const js = await app.request("/static/admin.js");
+  assert.match(js.headers.get("Content-Type")!, /javascript/);
+  assert.ok((await js.text()).includes("/api/live"));
 });
 
 test("화면: 상품 후기에는 별점 칩과 '승인하고 댓글 등록' 버튼이 보인다", async () => {

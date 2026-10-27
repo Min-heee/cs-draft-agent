@@ -6,9 +6,10 @@ import { ClaudeDrafter, FakeDrafter, type Drafter } from "./agent/drafter.ts";
 import { createCafe24Client, loadConfig, ROOT } from "./config.ts";
 import { Store } from "./db.ts";
 import { PolicyStore } from "./knowledge/policies.ts";
-import { Pipeline } from "./pipeline.ts";
+import { Pipeline, SyncError } from "./pipeline.ts";
 import { createApp } from "./server.ts";
 import { loadSizeCharts } from "./sizing.ts";
+import { Watcher } from "./watcher.ts";
 
 // 사용법: node src/cli.ts <serve|sync|draft|reset>
 
@@ -46,7 +47,13 @@ if (config.drafter === "fake") {
 const pipeline = new Pipeline(store, cafe24, drafter, config.concurrency);
 
 if (command === "sync") {
-  console.log(`새 문의 ${await pipeline.sync()}건을 불러왔습니다.`);
+  try {
+    console.log(`새 글 ${await pipeline.sync()}건을 불러왔습니다.`);
+  } catch (error) {
+    if (!(error instanceof SyncError)) throw error;
+    console.error(`새 글 ${error.added}건을 불러왔지만 일부를 확인하지 못했습니다: ${error.message}`);
+    process.exitCode = 1;
+  }
 } else if (command === "draft") {
   await pipeline.draftPending();
   console.log(store.countByStatus());
@@ -54,9 +61,12 @@ if (command === "sync") {
   store.resetStuckDrafting();
   const drafterLabel = { fake: "가짜 초안", "claude-code": `Claude Code 구독(${config.model})`, claude: config.model }[config.drafter];
   const modeLabel = `카페24 ${config.cafe24Mode === "mock" ? "목업" : "실제 API"} · ${drafterLabel}`;
-  const app = createApp({ store, pipeline, modeLabel, baselineMinutes: config.baselineMinutes });
+  const watcher = new Watcher(pipeline, store, config.autoSyncSeconds);
+  const app = createApp({ store, pipeline, modeLabel, baselineMinutes: config.baselineMinutes, watcher });
   serve({ fetch: app.fetch, port: config.port }, (info) => {
-    console.log(`검토 화면: http://localhost:${info.port}`);
+    console.log(`관리자 화면: http://localhost:${info.port}`);
+    console.log(config.autoSyncSeconds ? `새 글을 ${config.autoSyncSeconds}초마다 확인합니다.` : "자동 확인 꺼짐 (AUTO_SYNC_SECONDS=0)");
+    watcher.start();
   });
 } else {
   console.error(`모르는 명령입니다: ${command} (serve | sync | draft | reset)`);

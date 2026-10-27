@@ -23,3 +23,16 @@ test("시스템 프롬프트에는 후기 댓글 규칙이 모든 경로에 똑�
     assert.match(prompt, /후기 게시판의 글은 교환·반품 신청이 아닙니다/);
   }
 });
+
+test("고객 댓글은 앞선 글과 댓글을 <thread>로 넘기고, 문의·후기에는 <thread>가 없다", () => {
+  const comment = userMessage(
+    { ...base, article_no: 6_000_000_003, kind: "comment", comment_no: 3, parent_article_no: 29, thread: "원글 · 김*호 · 사이즈\n키 178" },
+    TODAY,
+  );
+  assert.match(comment, /글 종류: 고객 댓글/);
+  assert.match(comment, /글 번호: 29번 글에 달린 댓글\n/);
+  assert.match(comment, /<thread>\n원글 · 김\*호 · 사이즈\n키 178\n<\/thread>/);
+  assert.ok(!userMessage(base, TODAY).includes("<thread>"));
+  assert.match(userMessage(base, TODAY), /주문번호: 없음\n\n<inquiry>/);
+  for (const mode of ["api", "structured", "mcp"] as const) assert.match(buildSystemPrompt(mode), /## 고객 댓글에 다는 답 댓글/);
+});

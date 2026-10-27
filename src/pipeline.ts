@@ -1,7 +1,20 @@
 import { DraftError, type Drafter } from "./agent/drafter.ts";
-import type { Cafe24Client } from "./cafe24/types.ts";
+import { isComment, isReview, PartialListError, type Cafe24Client, type Inquiry } from "./cafe24/types.ts";
 import type { ReplyRow, ReviewAction, Store } from "./db.ts";
 import { editRatio } from "./textdiff.ts";
+
+/** 알림 문구에 쓰는 글 종류 이름. 예: "문의", "후기 ★2", "댓글" */
+export function kindName(q: Pick<Inquiry, "kind" | "rating">): string {
+  if (isReview(q)) return q.rating ? `후기 ★${q.rating}` : "후기";
+  if (isComment(q)) return "댓글";
+  return "문의";
+}
+
+/** 알림에 붙일 짧은 제목. 댓글은 글 제목보다 댓글 내용이 더 알아보기 쉽다. */
+function headline(q: Pick<Inquiry, "kind" | "title" | "content">): string {
+  const text = (isComment(q) ? q.content : q.title).replace(/\s+/g, " ").trim();
+  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+}
 
 export interface ReviewInput {
   /** approve는 화면의 답변을 그대로 등록. 초안과 다르면 자동으로 edit_approve로 기록한다. */
@@ -10,6 +23,15 @@ export interface ReviewInput {
   /** 검토 화면을 연 시각(ms). 검토 시간 측정에 쓴다. */
   openedAt: number;
   rejectReason?: string;
+}
+
+/** 새 글 확인이 일부 실패했을 때. 실패하기 전에 가져온 글은 이미 저장했다(added). */
+export class SyncError extends Error {
+  readonly added: number;
+  constructor(message: string, added: number) {
+    super(message);
+    this.added = added;
+  }
 }
 
 export class Pipeline {
@@ -26,10 +48,28 @@ export class Pipeline {
     this.concurrency = concurrency;
   }
 
-  /** 카페24에서 미답변 문의와 최근 상품 후기를 가져와 새 글만 저장한다. */
+  /**
+   * 카페24에서 미답변 문의, 최근 상품 후기, 고객 댓글을 가져와 새 글만 저장하고 알림을 남긴다. 새로 들어온 수를 돌려준다.
+   * 셋 중 하나가 실패해도 가져온 것은 저장하고, 그다음에 실패를 던진다(SyncError).
+   */
   async sync(): Promise<number> {
-    const [inquiries, reviews] = await Promise.all([this.cafe24.listUnansweredInquiries(), this.cafe24.listNewReviews()]);
-    return this.store.addInquiries([...inquiries, ...reviews]);
+    const isKnown = (key: number) => this.store.getInquiry(key) !== undefined;
+    const results = await Promise.allSettled([
+      this.cafe24.listUnansweredInquiries(),
+      this.cafe24.listNewReviews(),
+      this.cafe24.listNewComments(isKnown),
+    ]);
+    // 일부만 실패한 목록(PartialListError)도 그 전에 찾은 글은 저장한다.
+    const fetched = results.flatMap((r) =>
+      r.status === "fulfilled" ? r.value : r.reason instanceof PartialListError ? r.reason.partial : [],
+    );
+    const added = this.store.addInquiries(fetched);
+    for (const q of added) {
+      this.store.addNotification({ article_no: q.article_no, type: "arrived", message: `새 ${kindName(q)} · ${headline(q)}` });
+    }
+    const failed = results.flatMap((r) => (r.status === "rejected" ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : []));
+    if (failed.length) throw new SyncError([...new Set(failed)].join(" / "), added.length);
+    return added.length;
   }
 
   /** new 상태 문의를 모두 초안으로 만든다. 이미 돌고 있으면 그 작업을 기다린다. */
@@ -60,11 +100,17 @@ export class Pipeline {
       const result = await this.drafter.draft(inquiry);
       this.store.insertDraft({ ...result, article_no: articleNo });
       this.store.setStatus(articleNo, "drafted");
+      this.store.addNotification(
+        result.needs_human
+          ? { article_no: articleNo, type: "needs_human", message: `확인 필요 초안 · ${kindName(inquiry)} · ${headline(inquiry)}` }
+          : { article_no: articleNo, type: "drafted", message: `초안 준비 · ${kindName(inquiry)} · ${headline(inquiry)}` },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof DraftError) console.error(`[draft ${articleNo}] ${message}`, error.trace);
       else console.error(`[draft ${articleNo}]`, error);
       this.store.setStatus(articleNo, "error", message);
+      this.store.addNotification({ article_no: articleNo, type: "draft_failed", message: `초안 실패 · ${kindName(inquiry)} · ${headline(inquiry)}` });
     }
   }
 
@@ -121,9 +167,11 @@ export class Pipeline {
     try {
       const { remote_id } = await this.cafe24.postReply(inquiry, content);
       this.store.insertReply({ article_no: articleNo, review_id: reviewId, status: "posted", remote_id, error: null });
+      this.store.addNotification({ article_no: articleNo, type: "posted", message: `등록 완료 · ${kindName(inquiry)} · ${headline(inquiry)}` });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.store.insertReply({ article_no: articleNo, review_id: reviewId, status: "failed", remote_id: null, error: message });
+      this.store.addNotification({ article_no: articleNo, type: "post_failed", message: `등록 실패 · ${kindName(inquiry)} · ${headline(inquiry)}` });
     }
     return this.store.latestReply(articleNo)!;
   }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { Inquiry } from "./cafe24/types.ts";
 
@@ -58,6 +59,22 @@ export interface ReplyRow {
   created_at: string;
 }
 
+/**
+ * 담당자에게 띄우는 알림. 새 글이 들어왔을 때, 초안이 준비됐을 때, 등록했을 때, 무언가 실패했을 때 남긴다.
+ * 관리자 화면의 종 모양 목록과 화면 알림이 이 표를 읽는다.
+ */
+export type NotificationType = "arrived" | "drafted" | "needs_human" | "draft_failed" | "posted" | "post_failed" | "sync_failed";
+
+export interface NotificationRow {
+  id: number;
+  /** 새 글 확인 실패처럼 특정 글과 상관없는 알림은 null */
+  article_no: number | null;
+  type: NotificationType;
+  message: string;
+  created_at: string;
+  read_at: string | null;
+}
+
 export type NewDraft = Omit<DraftRow, "id" | "created_at">;
 export type NewReview = Omit<ReviewRow, "id" | "created_at">;
 
@@ -74,6 +91,9 @@ CREATE TABLE IF NOT EXISTS inquiries (
   created_date TEXT NOT NULL,
   kind         TEXT NOT NULL DEFAULT 'qna',
   rating       INTEGER,
+  comment_no   INTEGER,
+  parent_article_no INTEGER,
+  thread       TEXT,
   status       TEXT NOT NULL DEFAULT 'new',
   error        TEXT,
   synced_at    TEXT NOT NULL
@@ -117,6 +137,18 @@ CREATE TABLE IF NOT EXISTS replies (
   error      TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notifications (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  article_no INTEGER REFERENCES inquiries(article_no),
+  type       TEXT NOT NULL,
+  message    TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  read_at    TEXT
+);
 `;
 
 const now = () => new Date().toISOString();
@@ -135,30 +167,44 @@ function toDraft(row: Row): DraftRow {
 
 export class Store {
   readonly db: DatabaseSync;
+  /** DB를 만들 때 한 번 정하는 번호. 관리자 화면이 DB가 새로 만들어졌는지(알림 번호가 처음부터 다시 시작) 알아챈다. */
+  readonly dbId: string;
 
   constructor(file: string) {
     this.db = new DatabaseSync(file);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
     this.db.exec(SCHEMA);
-    // 상품 후기를 받기 전에 만든 DB에는 kind·rating 칸이 없다.
+    // 상품 후기를 받기 전에 만든 DB에는 kind·rating 칸이, 고객 댓글을 받기 전에 만든 DB에는 댓글 칸이 없다.
     const columns = new Set(this.db.prepare("PRAGMA table_info(inquiries)").all().map((c) => c.name as string));
-    if (!columns.has("kind")) this.db.exec("ALTER TABLE inquiries ADD COLUMN kind TEXT NOT NULL DEFAULT 'qna'");
-    if (!columns.has("rating")) this.db.exec("ALTER TABLE inquiries ADD COLUMN rating INTEGER");
+    const added: [string, string][] = [
+      ["kind", "TEXT NOT NULL DEFAULT 'qna'"],
+      ["rating", "INTEGER"],
+      ["comment_no", "INTEGER"],
+      ["parent_article_no", "INTEGER"],
+      ["thread", "TEXT"],
+    ];
+    for (const [name, type] of added) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE inquiries ADD COLUMN ${name} ${type}`);
+    }
+    this.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('db_id', ?)").run(randomUUID());
+    this.dbId = String(this.db.prepare("SELECT value FROM meta WHERE key = 'db_id'").get()!.value);
   }
 
-  /** 새 문의만 넣는다. 이미 있는 문의는 상태를 건드리지 않는다. 새로 들어온 수를 돌려준다. */
-  addInquiries(inquiries: Inquiry[]): number {
+  /** 새 문의만 넣는다. 이미 있는 문의는 상태를 건드리지 않는다. 새로 들어온 문의를 돌려준다. */
+  addInquiries(inquiries: Inquiry[]): Inquiry[] {
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO inquiries
-        (article_no, board_no, product_no, order_id, member_id, writer, title, content, created_date, kind, rating, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    let added = 0;
+        (article_no, board_no, product_no, order_id, member_id, writer, title, content, created_date, kind, rating,
+         comment_no, parent_article_no, thread, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const added: Inquiry[] = [];
     for (const q of inquiries) {
       const result = insert.run(
         q.article_no, q.board_no, q.product_no, q.order_id, q.member_id,
-        q.writer, q.title, q.content, q.created_date, q.kind ?? "qna", q.rating ?? null, now(),
+        q.writer, q.title, q.content, q.created_date, q.kind ?? "qna", q.rating ?? null,
+        q.comment_no ?? null, q.parent_article_no ?? null, q.thread ?? null, now(),
       );
-      added += Number(result.changes);
+      if (Number(result.changes) > 0) added.push(q);
     }
     return added;
   }
@@ -254,6 +300,55 @@ export class Store {
     return this.db
       .prepare("SELECT * FROM replies WHERE article_no = ? ORDER BY id DESC LIMIT 1")
       .get(articleNo) as ReplyRow | undefined;
+  }
+
+  addNotification(n: Pick<NotificationRow, "article_no" | "type" | "message">): number {
+    const result = this.db
+      .prepare("INSERT INTO notifications (article_no, type, message, created_at) VALUES (?, ?, ?, ?)")
+      .run(n.article_no, n.type, n.message, now());
+    return Number(result.lastInsertRowid);
+  }
+
+  /** afterId보다 나중에 생긴 알림을 오래된 것부터. 화면이 몇 초마다 새 알림만 받아 갈 때 쓴다. */
+  notificationsAfter(afterId: number, limit = 50): NotificationRow[] {
+    return this.db
+      .prepare("SELECT * FROM notifications WHERE id > ? ORDER BY id LIMIT ?")
+      .all(afterId, limit) as unknown as NotificationRow[];
+  }
+
+  /** 최근 알림을 새것부터 */
+  recentNotifications(limit = 30): NotificationRow[] {
+    return this.db.prepare("SELECT * FROM notifications ORDER BY id DESC LIMIT ?").all(limit) as unknown as NotificationRow[];
+  }
+
+  lastNotificationId(): number {
+    return Number(this.db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM notifications").get()!.id);
+  }
+
+  /**
+   * 읽지 않은 알림이 있는 글 수(글 하나에 "새 글"과 "초안 준비"가 와도 1). 글과 상관없는 알림은 하나씩 센다.
+   * 종 모양 숫자와 탭 제목에 쓴다.
+   */
+  unreadCount(): number {
+    const row = this.db
+      .prepare("SELECT COUNT(DISTINCT COALESCE(article_no, -id)) AS n FROM notifications WHERE read_at IS NULL")
+      .get()!;
+    return Number(row.n);
+  }
+
+  /** 읽지 않은 알림이 있는 글 번호. 문의함 목록에 "새" 표시를 붙인다. */
+  unreadArticles(): Set<number> {
+    const rows = this.db.prepare("SELECT DISTINCT article_no FROM notifications WHERE read_at IS NULL AND article_no IS NOT NULL").all();
+    return new Set(rows.map((r) => Number(r.article_no)));
+  }
+
+  /** 글 하나의 알림, 또는 articleNo가 없으면 모든 알림을 읽음으로 바꾼다. */
+  markNotificationsRead(articleNo?: number): void {
+    if (articleNo === undefined) {
+      this.db.prepare("UPDATE notifications SET read_at = ? WHERE read_at IS NULL").run(now());
+    } else {
+      this.db.prepare("UPDATE notifications SET read_at = ? WHERE read_at IS NULL AND article_no = ?").run(now(), articleNo);
+    }
   }
 
   close(): void {

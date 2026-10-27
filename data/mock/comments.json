@@ -1,0 +1,35 @@
+{
+  "_comment": "상품 Q&A·후기 글에 고객이 단 댓글(GET /admin/boards/{board_no}/comments 모양). 이름은 모두 지어낸 것이다.",
+  "comments": [
+    {
+      "board_no": 4,
+      "article_no": 1301,
+      "comment_no": 1,
+      "writer": "정*우",
+      "member_id": "demo_user20",
+      "content": "저도 175에 105kg인데 허리 40인치면 38 맞을까요? 허벅지도 굵은 편이에요.",
+      "created_date": "2026-10-21T13:24:00+09:00",
+      "parent_comment_no": null
+    },
+    {
+      "board_no": 4,
+      "article_no": 1201,
+      "comment_no": 2,
+      "writer": "김*호",
+      "member_id": "demo_user11",
+      "content": "하나 더 여쭤요. 어깨가 넓은 편인데 그럼 한 치수 더 크게 가야 할까요?",
+      "created_date": "2026-10-21T13:31:00+09:00",
+      "parent_comment_no": null
+    },
+    {
+      "board_no": 4,
+      "article_no": 1306,
+      "comment_no": 3,
+      "writer": "강*현",
+      "member_id": "demo_user21",
+      "content": "네이비 다시 들어오면 알림 받을 수 있나요?",
+      "created_date": "2026-10-21T13:38:00+09:00",
+      "parent_comment_no": null
+    }
+  ]
+}

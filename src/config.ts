@@ -21,6 +21,10 @@ export interface AppConfig {
   baselineMinutes: number | null;
   /** 평가 재현용 "지금" 시각(EVAL_NOW). 없으면 실제 현재 시각을 쓴다. */
   now: Date | null;
+  /** 관리자 화면을 띄워 둔 동안 카페24에서 새 글을 확인하는 간격(초). 0이면 "지금 확인" 버튼으로만 가져온다. */
+  autoSyncSeconds: number;
+  /** 목업 시연용: 확인할 때마다 글을 이만큼씩만 더 내놓는다. 0이면 처음부터 모두 내놓는다. */
+  mockDrip: number;
 }
 
 function oneOf<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {
@@ -32,6 +36,8 @@ function oneOf<T extends string>(value: string | undefined, allowed: readonly T[
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const baseline = Number(env.BASELINE_MINUTES_PER_REPLY);
   const now = env.EVAL_NOW ? new Date(env.EVAL_NOW) : null;
+  const autoSync = Number(env.AUTO_SYNC_SECONDS ?? 60);
+  const drip = Number(env.MOCK_DRIP ?? 0);
   return {
     dbFile: path.resolve(ROOT, env.DB_FILE ?? "data/app.db"),
     dataDir: path.join(ROOT, "data"),
@@ -43,11 +49,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     concurrency: Math.max(1, Number(env.DRAFT_CONCURRENCY ?? 3)),
     baselineMinutes: Number.isFinite(baseline) && baseline > 0 ? baseline : null,
     now: now && !Number.isNaN(now.getTime()) ? now : null,
+    // 카페24 호출 한도를 생각해 10초보다 자주 확인하지 않는다.
+    autoSyncSeconds: Number.isFinite(autoSync) && autoSync > 0 ? Math.max(10, autoSync) : 0,
+    mockDrip: Number.isFinite(drip) && drip > 0 ? Math.floor(drip) : 0,
   };
 }
 
 export function createCafe24Client(config: AppConfig, env: NodeJS.ProcessEnv = process.env): Cafe24Client {
-  if (config.cafe24Mode === "mock") return new MockCafe24Client(path.join(config.dataDir, "mock"));
+  if (config.cafe24Mode === "mock") return new MockCafe24Client(path.join(config.dataDir, "mock"), { drip: config.mockDrip });
   const required = ["CAFE24_MALL_ID", "CAFE24_CLIENT_ID", "CAFE24_CLIENT_SECRET", "CAFE24_BOARD_NO"] as const;
   const missing = required.filter((k) => !env[k]);
   if (missing.length) throw new Error(`CAFE24_MODE=api 에 필요한 환경 변수가 없습니다: ${missing.join(", ")}`);
@@ -59,6 +68,7 @@ export function createCafe24Client(config: AppConfig, env: NodeJS.ProcessEnv = p
     reviewBoardNo: env.CAFE24_REVIEW_BOARD_NO ? Number(env.CAFE24_REVIEW_BOARD_NO) : undefined,
     tokenFile: path.resolve(ROOT, env.CAFE24_TOKEN_FILE ?? "data/cafe24-token.json"),
     replyWriter: env.CAFE24_REPLY_WRITER ?? "CS팀",
+    staffWriters: (env.CAFE24_STAFF_WRITERS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     clientIp: env.CAFE24_CLIENT_IP ?? "127.0.0.1",
   });
 }

@@ -96,6 +96,7 @@ test("사이즈 옵션이 없고 재고를 세지 않는 상품: 품절로 보�
   const cafe24: Cafe24Client = {
     listUnansweredInquiries: async () => [],
     listNewReviews: async () => [],
+    listNewComments: async () => [],
     getProduct: async () => product,
     getOrder: async () => null,
     postReply: async () => ({ remote_id: "x" }),

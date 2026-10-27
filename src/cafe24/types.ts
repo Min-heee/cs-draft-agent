@@ -2,7 +2,7 @@
 // 필드 이름은 API 응답과 같게 두어서 목업 데이터와 실제 API를 바꿔 끼울 수 있게 한다.
 // 참고: https://apidocs.cafe24.com/en/docs/admin/
 
-/** GET /admin/boards/{board_no}/articles 의 글 하나 (상품 Q&A 문의 또는 상품 후기) */
+/** GET /admin/boards/{board_no}/articles 의 글 하나 (상품 Q&A 문의 또는 상품 후기), 또는 고객이 단 댓글 하나 */
 export interface Inquiry {
   article_no: number;
   board_no: number;
@@ -13,14 +13,61 @@ export interface Inquiry {
   title: string;
   content: string;
   created_date: string;
-  /** qna: 상품 Q&A 문의(답글로 답함), review: 상품 후기(댓글로 답함). 없으면 qna. */
-  kind?: "qna" | "review";
+  /** qna: 상품 Q&A 문의(답글로 답함), review: 상품 후기(댓글로 답함), comment: 고객이 글에 단 댓글(그 아래 댓글로 답함). 없으면 qna. */
+  kind?: "qna" | "review" | "comment";
   /** 상품 후기의 별점(1~5). 문의에는 없다. */
   rating?: number | null;
+  /** 고객 댓글만: 카페24 댓글 번호 */
+  comment_no?: number | null;
+  /** 고객 댓글만: 댓글이 달린 글 번호 */
+  parent_article_no?: number | null;
+  /** 고객 댓글만: 댓글이 달린 원글·답글과 앞선 댓글을 순서대로 적은 텍스트 */
+  thread?: string | null;
 }
 
 export function isReview(inquiry: Pick<Inquiry, "kind">): boolean {
   return inquiry.kind === "review";
+}
+
+export function isComment(inquiry: Pick<Inquiry, "kind">): boolean {
+  return inquiry.kind === "comment";
+}
+
+/** 후기와 고객 댓글에는 답글이 아니라 댓글로 답한다. */
+export function answersWithComment(inquiry: Pick<Inquiry, "kind">): boolean {
+  return isReview(inquiry) || isComment(inquiry);
+}
+
+/**
+ * 고객 댓글에는 글 번호가 없어서, 문의함에서 쓸 번호를 게시판 번호와 댓글 번호로 만든다.
+ * 실제 글 번호와 겹치지 않게 게시판마다 10억씩 띄운다. 예: 4번 게시판 댓글 7 → 4000000007
+ */
+export const COMMENT_KEY_BASE = 1_000_000_000;
+
+export function commentKey(boardNo: number, commentNo: number): number {
+  return boardNo * COMMENT_KEY_BASE + commentNo;
+}
+
+/** 목록을 가져오다 일부만 실패했을 때. 실패하기 전에 찾은 글(partial)은 저장할 수 있다. */
+export class PartialListError extends Error {
+  readonly partial: Inquiry[];
+  constructor(message: string, partial: Inquiry[]) {
+    super(message);
+    this.partial = partial;
+  }
+}
+
+/** GET /admin/boards/{board_no}/comments 의 댓글 하나 */
+export interface BoardComment {
+  board_no: number;
+  article_no: number;
+  comment_no: number;
+  content: string;
+  writer: string;
+  member_id: string | null;
+  created_date: string;
+  /** 다른 댓글에 단 댓글이면 그 댓글 번호 */
+  parent_comment_no: number | null;
 }
 
 /** GET /admin/orders/{order_id}?embed=items 의 items[] */
@@ -93,8 +140,13 @@ export interface Cafe24Client {
   listUnansweredInquiries(): Promise<Inquiry[]>;
   /** 상품 후기 게시판의 최근 후기(kind=review). 이미 가져온 후기는 저장할 때 걸러진다. */
   listNewReviews(): Promise<Inquiry[]>;
+  /**
+   * 상품 Q&A·후기 게시판에 고객이 단 댓글 중 아직 답하지 않은 것(kind=comment).
+   * isKnown이 true인 댓글(이미 문의함에 있는 것)은 앞선 글을 다시 읽지 않고 건너뛴다.
+   */
+  listNewComments(isKnown?: (key: number) => boolean): Promise<Inquiry[]>;
   getOrder(orderId: string): Promise<Order | null>;
   getProduct(productNo: number): Promise<Product | null>;
-  /** 문의에는 답글로, 후기에는 댓글로 등록한다. */
+  /** 문의에는 답글로, 후기에는 댓글로, 고객 댓글에는 그 댓글 아래 댓글로 등록한다. */
   postReply(inquiry: Inquiry, content: string): Promise<ReplyResult>;
 }

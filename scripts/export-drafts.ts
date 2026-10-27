@@ -4,6 +4,7 @@
 import { loadConfig } from "../src/config.ts";
 import { Store } from "../src/db.ts";
 import { draftCostUsd } from "../src/metrics.ts";
+import { itemLabel } from "../src/views.ts";
 
 const config = loadConfig();
 const store = new Store(config.dbFile);
@@ -18,7 +19,7 @@ let totalCost = 0;
 
 for (const q of inquiries) {
   const d = drafts.get(q.article_no);
-  out.push(`## #${q.article_no} ${q.title}`, "", `> ${q.content}`, "");
+  out.push(`## ${itemLabel(q)} ${q.title}`, "", `> ${q.content}`, "");
   if (!d) {
     out.push(`**상태: ${q.status}** ${q.error ?? ""}`, "");
     continue;
