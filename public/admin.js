@@ -85,7 +85,16 @@
     posted: "카페24에 등록했습니다",
     post_failed: "처리 완료 탭에서 다시 등록해 주세요",
     sync_failed: "카페24 연결을 확인해 주세요",
+    complaint_rise: "불만 사유 리포트에서 확인해 주세요",
   };
+
+  // 불만 사유 탭: '지금 만들기'가 끝나면(만드는 중 → 끝) 다시 읽어 새 순위를 보여 준다.
+  let complaintsWereRunning = null;
+  function watchComplaints(data) {
+    if (page !== "complaints" || typeof data.complaintsRunning !== "boolean") return;
+    if (complaintsWereRunning === true && data.complaintsRunning === false) location.reload();
+    complaintsWereRunning = data.complaintsRunning;
+  }
 
   function toast(n) {
     if (!toasts) return;
@@ -209,6 +218,7 @@
         lastId = live.lastId;
         dbId = live.dbId;
         if (live.notifications.length) announce(live.notifications);
+        watchComplaints(live);
         const signature = JSON.stringify([live.counts, live.unread]);
         if (page === "inbox" && (live.notifications.length || signature !== lastSignature)) {
           await refreshList();

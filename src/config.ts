@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { Cafe24ApiClient } from "./cafe24/api.ts";
 import { MockCafe24Client } from "./cafe24/mock.ts";
 import type { Cafe24Client } from "./cafe24/types.ts";
+import { Cafe24ComplaintSource, FileComplaintSource, MockComplaintSource, type ComplaintSource } from "./complaints/source.ts";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -25,6 +26,12 @@ export interface AppConfig {
   autoSyncSeconds: number;
   /** 목업 시연용: 확인할 때마다 글을 이만큼씩만 더 내놓는다. 0이면 처음부터 모두 내놓는다. */
   mockDrip: number;
+  /** 불만 사유 분류: rules=규칙만, claude-code=규칙 + 로그인한 Claude Code(구독). API 키 경로는 쓰지 않는다. */
+  complaintClassifier: "rules" | "claude-code";
+  /** 불만 사유 리포트를 매일 만들 한국 시각(시). -1이면 자동으로 만들지 않는다. */
+  complaintReportHour: number;
+  /** 불만 사유 리포트가 읽을 시험 글 파일(COMPLAINT_SOURCE). 없으면 카페24(또는 목업)를 읽는다. */
+  complaintSourceFile: string | null;
 }
 
 function oneOf<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {
@@ -52,7 +59,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // 카페24 호출 한도를 생각해 10초보다 자주 확인하지 않는다.
     autoSyncSeconds: Number.isFinite(autoSync) && autoSync > 0 ? Math.max(10, autoSync) : 0,
     mockDrip: Number.isFinite(drip) && drip > 0 ? Math.floor(drip) : 0,
+    complaintClassifier: oneOf(
+      env.COMPLAINT_CLASSIFIER,
+      ["rules", "claude-code"],
+      env.DRAFTER === "claude-code" ? "claude-code" : "rules",
+    ),
+    complaintReportHour: reportHour(env.COMPLAINT_REPORT_HOUR),
+    complaintSourceFile: env.COMPLAINT_SOURCE ? path.resolve(ROOT, env.COMPLAINT_SOURCE) : null,
   };
+}
+
+function reportHour(value: string | undefined): number {
+  if (value === undefined || value === "") return 9;
+  const hour = Number(value);
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : -1;
 }
 
 export function createCafe24Client(config: AppConfig, env: NodeJS.ProcessEnv = process.env): Cafe24Client {
@@ -70,5 +90,25 @@ export function createCafe24Client(config: AppConfig, env: NodeJS.ProcessEnv = p
     replyWriter: env.CAFE24_REPLY_WRITER ?? "CS팀",
     staffWriters: (env.CAFE24_STAFF_WRITERS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     clientIp: env.CAFE24_CLIENT_IP ?? "127.0.0.1",
+  });
+}
+
+/** 직원이 쓰는 이름(답글 작성자 + CAFE24_STAFF_WRITERS). 불만 사유 리포트가 이 이름의 글·댓글을 세지 않는다. */
+export function staffWriters(env: NodeJS.ProcessEnv = process.env): string[] {
+  return [env.CAFE24_REPLY_WRITER ?? "CS팀", ...(env.CAFE24_STAFF_WRITERS ?? "").split(",").map((s) => s.trim()).filter(Boolean)];
+}
+
+/**
+ * 불만 사유 리포트가 읽을 고객 글. 시험 글 파일 → 목업 → 카페24(GET만) 순으로 고른다.
+ * 카페24는 쓰기 함수가 없는 readOnly()만 넘긴다.
+ */
+export function createComplaintSource(config: AppConfig, client: Cafe24Client, env: NodeJS.ProcessEnv = process.env): ComplaintSource {
+  const mockDir = path.join(config.dataDir, "mock");
+  if (config.complaintSourceFile) return new FileComplaintSource(config.complaintSourceFile, mockDir);
+  if (!(client instanceof Cafe24ApiClient)) return new MockComplaintSource(mockDir, staffWriters(env));
+  return new Cafe24ComplaintSource(client.readOnly(), {
+    qnaBoardNo: Number(env.CAFE24_BOARD_NO),
+    reviewBoardNo: env.CAFE24_REVIEW_BOARD_NO ? Number(env.CAFE24_REVIEW_BOARD_NO) : undefined,
+    staffWriters: staffWriters(env),
   });
 }

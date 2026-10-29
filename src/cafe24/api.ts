@@ -61,6 +61,9 @@ export function toArticleHtml(text: string): string {
     .replace(/\r?\n/g, "<br>\n");
 }
 
+/** 카페24 Admin API GET 한 번. 경로는 "/admin/..." 꼴 */
+export type Cafe24Get = <T>(path: string, query?: Record<string, string>) => Promise<T>;
+
 export class Cafe24ApiError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -83,6 +86,14 @@ export class Cafe24ApiClient implements Cafe24Client {
     this.config = config;
     this.base = `https://${config.mallId}.cafe24api.com/api/v2`;
     this.staff = new Set([config.replyWriter, ...(config.staffWriters ?? [])]);
+  }
+
+  /**
+   * GET만 할 수 있는 호출 함수. 불만 사유 리포트처럼 쇼핑몰에 쓰지 않는 기능은 이것만 받는다.
+   * 앱 토큰에는 게시판 쓰기 권한도 있어서, 읽기 기능이 쓰기 함수를 아예 만질 수 없게 나눈다.
+   */
+  readOnly(): Cafe24Get {
+    return <T>(path: string, query: Record<string, string> = {}) => this.request<T>("GET", path, { query });
   }
 
   async listUnansweredInquiries(): Promise<Inquiry[]> {

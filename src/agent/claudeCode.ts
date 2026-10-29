@@ -49,7 +49,7 @@ export interface ClaudeCodeOptions {
   timeoutMs?: number;
 }
 
-interface StreamEvent {
+export interface StreamEvent {
   type: string;
   subtype?: string;
   message?: { model?: string; content?: ContentBlock[] };
@@ -159,42 +159,53 @@ export class ClaudeCodeDrafter implements Drafter {
     ];
   }
 
-  private run(args: string[]): Promise<StreamEvent[]> {
-    const [command, ...prefix] = this.options.command ?? ["claude"];
-    return new Promise((resolve, reject) => {
-      // 프로젝트 밖(임시 폴더)에서 띄워 이 저장소의 설정이 섞이지 않게 한다.
-      const child = spawn(command, [...prefix, ...args], {
-        cwd: tmpdir(),
-        env: claudeEnv(),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      const timer = setTimeout(() => child.kill("SIGTERM"), this.options.timeoutMs ?? 300_000);
-      child.stdout.on("data", (chunk) => (stdout += chunk));
-      child.stderr.on("data", (chunk) => (stderr += chunk));
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        reject(new DraftError(`claude 명령을 실행하지 못했습니다: ${error.message}`, []));
-      });
-      child.on("close", (code, signal) => {
-        clearTimeout(timer);
-        const events = stdout
-          .split("\n")
-          .map((line) => parseJson(line) as StreamEvent | undefined)
-          .filter((e): e is StreamEvent => typeof e?.type === "string");
-        if (events.length === 0) {
-          const why = signal ? `시간 초과(${signal})` : `종료 코드 ${code}`;
-          reject(new DraftError(`claude 출력이 없습니다(${why}). ${stderr.trim().slice(0, 300)}`, []));
-          return;
-        }
-        resolve(events);
-      });
-    });
+  private async run(args: string[]): Promise<StreamEvent[]> {
+    try {
+      return await runClaude(this.options.command ?? ["claude"], args, this.options.timeoutMs ?? 300_000);
+    } catch (error) {
+      throw new DraftError(error instanceof Error ? error.message : String(error), []);
+    }
   }
 }
 
-function parseJson(text: string | undefined): unknown {
+/**
+ * `claude -p ... --output-format stream-json`을 띄우고 이벤트를 모은다. 초안과 불만 사유 분류가 같이 쓴다.
+ * 프로젝트 밖(임시 폴더)에서 띄워 이 저장소의 설정이 섞이지 않게 한다.
+ */
+export function runClaude(commandLine: string[], args: string[], timeoutMs: number): Promise<StreamEvent[]> {
+  const [command, ...prefix] = commandLine;
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...prefix, ...args], {
+      cwd: tmpdir(),
+      env: claudeEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(new Error(`claude 명령을 실행하지 못했습니다: ${error.message}`));
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      const events = stdout
+        .split("\n")
+        .map((line) => parseJson(line) as StreamEvent | undefined)
+        .filter((e): e is StreamEvent => typeof e?.type === "string");
+      if (events.length === 0) {
+        const why = signal ? `시간 초과(${signal})` : `종료 코드 ${code}`;
+        reject(new Error(`claude 출력이 없습니다(${why}). ${stderr.trim().slice(0, 300)}`));
+        return;
+      }
+      resolve(events);
+    });
+  });
+}
+
+export function parseJson(text: string | undefined): unknown {
   if (!text?.trim()) return undefined;
   try {
     return JSON.parse(text);

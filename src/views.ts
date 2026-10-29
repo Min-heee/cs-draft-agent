@@ -2,6 +2,8 @@ import { html, raw } from "hono/html";
 import { answersWithComment, isComment, isReview, type Inquiry } from "./cafe24/types.ts";
 import type { DraftRow, InquiryRow, NotificationRow, ReplyRow, ReviewRow } from "./db.ts";
 import { draftCostUsd, type Metrics } from "./metrics.ts";
+import type { ComplaintReport } from "./complaints/report.ts";
+import type { ReportSchedule } from "./complaints/scheduler.ts";
 import type { WatchStatus } from "./watcher.ts";
 
 // 관리자 화면은 서버에서 HTML로 그린다. html`` 은 끼워 넣는 값을 자동으로 이스케이프한다.
@@ -47,7 +49,7 @@ export interface PageContext {
 
 /** 화면이 어디인지. admin.js가 body의 data-* 로 읽는다. */
 interface PageInfo {
-  page: "inbox" | "detail" | "metrics" | "notifications" | "error";
+  page: "inbox" | "detail" | "metrics" | "notifications" | "complaints" | "error";
   tab?: InboxTab;
   item?: number;
   status?: string;
@@ -135,7 +137,7 @@ button.link { border: 0; background: none; padding: 2px 4px; color: var(--muted)
 .feed .empty-feed { padding: 24px 10px; text-align: center; color: var(--muted); font-size: 14px; }
 .n-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 8px; background: var(--info); }
 .type-drafted .n-dot, .type-posted .n-dot { background: var(--accent); }
-.type-needs_human .n-dot { background: var(--warn); }
+.type-needs_human .n-dot, .type-complaint_rise .n-dot { background: var(--warn); }
 .type-draft_failed .n-dot, .type-post_failed .n-dot, .type-sync_failed .n-dot { background: var(--danger); }
 .n-text { word-break: keep-all; overflow-wrap: anywhere; }
 .feed time { font-size: 12px; color: var(--muted); white-space: nowrap; margin-top: 2px; }
@@ -202,6 +204,13 @@ details { border-top: 1px solid var(--line); padding: 8px 0; }
 details:first-of-type { border-top: 0; }
 summary { cursor: pointer; }
 pre { white-space: pre-wrap; word-break: break-all; background: var(--bg); padding: 10px; border-radius: 6px; font-size: 12px; margin: 6px 0 0; }
+.complaint-product { border-top: 1px solid var(--line); padding: 10px 0; }
+.complaint-product:first-of-type { border-top: 0; }
+.complaint-product h3 { font-size: 15px; margin: 0 0 4px; }
+.complaint-product ol { margin: 0 0 6px; padding-left: 20px; }
+.complaint-product blockquote { margin: 4px 0; padding: 4px 10px; border-left: 3px solid var(--line); font-size: 14px; overflow-wrap: anywhere; }
+.notice { margin-bottom: 16px; overflow-wrap: anywhere; }
+.checks li { margin: 6px 0; overflow-wrap: anywhere; }
 .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; margin-bottom: 20px; }
 .kpi .label { color: var(--muted); font-size: 13px; }
 .kpi .value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0; }
@@ -245,7 +254,8 @@ const clockTime = (iso: string) =>
 const pct = (v: number | null) => (v === null ? "–" : `${Math.round(v * 100)}%`);
 
 /** 알림을 누르면 갈 곳 */
-export function notificationLink(n: Pick<NotificationRow, "article_no">): string {
+export function notificationLink(n: Pick<NotificationRow, "article_no" | "type">): string {
+  if (n.type === "complaint_rise") return "/complaints";
   return n.article_no === null ? "/notifications" : `/inquiries/${n.article_no}`;
 }
 
@@ -292,6 +302,7 @@ export function layout(title: string, info: PageInfo, ctx: PageContext, body: Ht
     ${TABS.map((t) => navLink(`/inbox?tab=${t.key}`, t.label, info.page === "inbox" && info.tab === t.key, countEl(t.key, nav.counts[t.key], tone[t.key])))}
     <div class="nav-label">관리</div>
     ${navLink("/notifications", "알림", info.page === "notifications", countEl("unread", nav.unread, "danger"))}
+    ${navLink("/complaints", "불만 사유", info.page === "complaints")}
     ${navLink("/metrics", "지표", info.page === "metrics")}
   </nav>
   <div class="side-foot">${ctx.modeLabel}</div>
@@ -605,6 +616,114 @@ export function metricsPage(ctx: PageContext, m: Metrics) {
   }
 </div>`;
   return layout("지표", { page: "metrics" }, ctx, body);
+}
+
+export type ComplaintPeriod = "7" | "30" | "all";
+
+export const COMPLAINT_PERIODS: { key: ComplaintPeriod; label: string; days: number | null }[] = [
+  { key: "7", label: "지난 7일", days: 7 },
+  { key: "30", label: "지난 30일", days: 30 },
+  { key: "all", label: "전체", days: null },
+];
+
+export interface ComplaintsView {
+  period: ComplaintPeriod;
+  report: ComplaintReport;
+  /** 기간과 상관없이 저장된 분류 결과 수. 0이면 아직 한 번도 만들지 않은 것이다. */
+  totalLabeled: number;
+  schedule: ReportSchedule;
+  classifierLabel: string;
+  sourceName: string;
+}
+
+/** 불만 사유 리포트. 순위는 DB에 저장된 분류 결과로 화면을 열 때마다 다시 계산한다(LLM은 부르지 않는다). */
+export function complaintsPage(ctx: PageContext, v: ComplaintsView) {
+  const { report: r, schedule } = v;
+  const kpi = (label: string, value: string | number, help: string) =>
+    html`<div class="card kpi"><div class="label">${label}</div><div class="value">${value}</div><div class="help">${help}</div></div>`;
+  const delta = (prev: number | null, count: number) =>
+    prev === null ? "" : count > prev ? `+${count - prev}` : count < prev ? `${count - prev}` : "0";
+  const when =
+    schedule.hour < 0
+      ? "자동으로 만들지 않습니다(COMPLAINT_REPORT_HOUR)."
+      : `매일 ${schedule.hour}시 이후 처음 확인할 때 만듭니다(앱이 켜져 있을 때).`;
+  const body = html`
+<div class="toolbar">
+  <nav class="seg" aria-label="기간">
+    ${COMPLAINT_PERIODS.map((p) => html`<a href="/complaints${p.key === "7" ? "" : `?days=${p.key}`}" class="${p.key === v.period ? "on" : ""}">${p.label}</a>`)}
+  </nav>
+  <a href="/complaints.csv${v.period === "7" ? "" : `?days=${v.period}`}">CSV 받기</a>
+  <form method="post" action="/complaints/run" style="margin-left:auto">
+    <input type="hidden" name="days" value="${v.period}">
+    <button class="primary" type="submit"${schedule.running ? html` disabled` : ""}>${schedule.running ? "만드는 중…" : "지금 만들기"}</button>
+  </form>
+</div>
+<p class="muted small">${when} 마지막 리포트 ${schedule.lastDate ?? "없음"} · 자료 ${v.sourceName} · 분류 ${v.classifierLabel}</p>
+${schedule.running ? html`<div class="notice" role="status">리포트를 만드는 중입니다. 끝나면 화면이 저절로 바뀝니다.</div>` : ""}
+${schedule.lastError ? html`<div class="notice danger" role="alert"><strong>리포트를 만들지 못했습니다.</strong> ${schedule.lastError}</div>` : ""}
+${
+  r.fallback || schedule.lastWarning
+    ? html`<div class="notice warn" role="status"><strong>Claude 분류 실패 ${r.fallback}건</strong>은 규칙 결과로 두었고 다음에 만들 때 다시 분류합니다.${schedule.lastWarning ? html` (${schedule.lastWarning})` : ""}</div>`
+    : ""
+}
+<div class="kpis">
+  ${kpi("고객 글", r.posts, "이 기간에 올라온 후기·문의·댓글")}
+  ${kpi("불만 글", r.complaints, "사유가 하나 이상인 글")}
+  ${kpi("불만 아님", r.not_complaints, "칭찬, 구매 전 질문, 요청")}
+  ${kpi("확인 필요", r.needs_check, "근거가 원문에 없거나 확신도가 낮거나 글에 지시가 든 글 (아래 목록)")}
+</div>
+${
+  r.rising.length
+    ? html`<div class="notice warn" role="status"><strong>늘어난 사유</strong> · ${r.rising.map((x, i) => html`${i ? ", " : ""}${x.label} ${x.previous}→${x.count}건`)}</div>`
+    : ""
+}
+<div class="card">
+  <h2>전체 사유 순위</h2>
+  ${
+    r.overall.length === 0
+      ? html`<p class="muted">${
+          v.totalLabeled === 0
+            ? "아직 분류한 글이 없습니다. '지금 만들기'를 눌러 주세요."
+            : r.posts
+              ? "이 기간에는 불만 글이 없습니다."
+              : "이 기간에 올라온 고객 글이 없습니다. 30일이나 전체를 골라 보세요."
+        }</p>`
+      : html`<table>
+    <thead><tr><th>순위</th><th>사유</th><th>건수</th><th>불만 글 중</th>${r.days === null ? "" : html`<th>지난 기간 대비</th>`}</tr></thead>
+    <tbody>${r.overall.map(
+      (x, i) => html`<tr><td>${i + 1}</td><td>${x.label}</td><td>${x.count}</td><td>${pct(x.share)}</td>${r.days === null ? "" : html`<td>${delta(x.previous, x.count)}</td>`}</tr>`,
+    )}</tbody>
+  </table>`
+  }
+</div>
+<div class="card">
+  <h2>상품별</h2>
+  ${
+    r.products.length === 0
+      ? html`<p class="muted">없음</p>`
+      : r.products.map(
+          (p) => html`<section class="complaint-product">
+    <h3>${p.name} <span class="muted small">불만 글 ${p.complaints}건</span></h3>
+    <ol>${p.reasons.map((x) => html`<li>${x.label} ${x.count}건</li>`)}</ol>
+    ${p.quotes.map(
+      (q) => html`<blockquote>${q.text}<span class="muted small"> · ${q.kind === "review" ? `후기${q.rating ? ` ★${q.rating}` : ""}` : q.kind === "qna" ? "문의" : "댓글"} · ${q.created_date.slice(0, 10)}</span></blockquote>`,
+    )}
+  </section>`,
+        )
+  }
+</div>
+${
+  r.checks.length
+    ? html`<details class="card" id="needs-check">
+  <summary><strong>확인 필요 글 ${r.checks.length}건</strong> <span class="muted small">순위에는 세고 인용에서는 뺀 글</span></summary>
+  <ul class="checks">${r.checks.map(
+    (x) => html`<li><span class="chip">${x.product}</span>${x.reasons.length ? x.reasons.join(", ") : "불만 아님"} · <span class="muted small">${x.why.join(" / ")} · ${x.created_date.slice(0, 10)}</span><br>${x.text}</li>`,
+  )}</ul>
+</details>`
+    : ""
+}
+<p class="muted small">글마다 한 번만 분류해 저장하고, 화면은 저장된 결과로 순위를 다시 셉니다. 확인 필요 글은 순위에 세고 인용에서는 뺍니다. 인용문의 전화번호·주문번호·주소·이메일·계좌번호는 가립니다. 쇼핑몰에는 아무것도 쓰지 않습니다.</p>`;
+  return layout("불만 사유", { page: "complaints" }, ctx, body);
 }
 
 export function errorPage(ctx: PageContext, message: string) {

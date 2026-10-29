@@ -63,7 +63,16 @@ export interface ReplyRow {
  * 담당자에게 띄우는 알림. 새 글이 들어왔을 때, 초안이 준비됐을 때, 등록했을 때, 무언가 실패했을 때 남긴다.
  * 관리자 화면의 종 모양 목록과 화면 알림이 이 표를 읽는다.
  */
-export type NotificationType = "arrived" | "drafted" | "needs_human" | "draft_failed" | "posted" | "post_failed" | "sync_failed";
+export type NotificationType =
+  | "arrived"
+  | "drafted"
+  | "needs_human"
+  | "draft_failed"
+  | "posted"
+  | "post_failed"
+  | "sync_failed"
+  /** 불만 사유 리포트에서 지난주보다 늘어난 사유 */
+  | "complaint_rise";
 
 export interface NotificationRow {
   id: number;

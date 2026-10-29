@@ -4,9 +4,15 @@ import { Hono } from "hono";
 import { ROOT } from "./config.ts";
 import type { DraftRow, InquiryRow, InquiryStatus, Store } from "./db.ts";
 import { computeMetrics } from "./metrics.ts";
+import { computeReport, kstDate, renderCsv } from "./complaints/report.ts";
+import type { DailyReportScheduler } from "./complaints/scheduler.ts";
+import { productNamesKey, type ComplaintStore } from "./complaints/store.ts";
+import type { Classifier } from "./complaints/types.ts";
 import { answersWithComment } from "./cafe24/types.ts";
 import { SyncError, type Pipeline } from "./pipeline.ts";
 import {
+  complaintsPage,
+  COMPLAINT_PERIODS,
   detailPage,
   errorPage,
   inboxBody,
@@ -31,6 +37,16 @@ export interface AppDeps {
   baselineMinutes: number | null;
   /** 자동 확인. 없으면 "지금 확인"을 눌렀을 때만 가져온다(시험). */
   watcher?: Watcher;
+  /** 불만 사유 리포트 탭. 없으면 탭이 "꺼져 있음"을 보여 준다. */
+  complaints?: ComplaintsDeps;
+}
+
+export interface ComplaintsDeps {
+  store: ComplaintStore;
+  classifier: Classifier;
+  scheduler: DailyReportScheduler;
+  sourceName: string;
+  now: () => Date;
 }
 
 const TAB_STATUSES: Record<InboxTab, InquiryStatus[]> = {
@@ -54,7 +70,7 @@ function inTab(tab: InboxTab, q: InquiryRow, draft: DraftRow | undefined): boole
 const kindOf = (q: InquiryRow): KindFilter => q.kind ?? "qna";
 
 export function createApp(deps: AppDeps): Hono {
-  const { store, pipeline, watcher } = deps;
+  const { store, pipeline, watcher, complaints } = deps;
   const app = new Hono();
 
   function rowsFor(tab: InboxTab, drafts = store.latestDrafts()) {
@@ -91,6 +107,19 @@ export function createApp(deps: AppDeps): Hono {
     const rows = kind === "all" ? all : all.filter((r) => kindOf(r.inquiry) === kind);
     return { rows, kindCounts };
   }
+
+  // 다른 사이트가 이 화면으로 폼을 보내지 못하게 한다(승인·등록·리포트 만들기는 모두 POST).
+  // 브라우저는 POST에 Origin·Sec-Fetch-Site를 붙인다. 둘 다 없는 요청(명령줄, 시험)은 그대로 둔다.
+  app.use("*", async (c, next) => {
+    if (c.req.method === "POST") {
+      const site = c.req.header("Sec-Fetch-Site");
+      const origin = c.req.header("Origin");
+      const host = c.req.header("Host");
+      const crossOrigin = origin !== undefined && origin !== "null" && host !== undefined && new URL(origin).host !== host;
+      if (site === "cross-site" || crossOrigin) return c.text("다른 사이트에서 보낸 요청은 받지 않습니다.", 403);
+    }
+    await next();
+  });
 
   app.get("/", (c) => c.redirect("/inbox"));
 
@@ -145,6 +174,7 @@ export function createApp(deps: AppDeps): Hono {
       counts: tabCounts(),
       drafting: pipeline.isDrafting,
       watch: watchLine(watcher?.status ?? null, pipeline.isDrafting),
+      complaintsRunning: complaints?.scheduler.status.running ?? false,
     });
   });
 
@@ -210,6 +240,52 @@ export function createApp(deps: AppDeps): Hono {
     const reply = await pipeline.retryReply(no);
     const msg = reply.status === "posted" ? "카페24에 등록했습니다." : `다시 실패했습니다: ${reply.error}`;
     return c.redirect(`/inquiries/${no}?msg=${encodeURIComponent(msg)}`);
+  });
+
+  /** 기간 선택(7·30·전체)으로 리포트를 계산한다. 저장된 분류 결과만 쓰고 LLM이나 카페24는 부르지 않는다. */
+  function complaintReport(period: string | undefined) {
+    const deps = complaints!;
+    const p = COMPLAINT_PERIODS.find((x) => x.key === period) ?? COMPLAINT_PERIODS[0];
+    const names = new Map<number, string>(JSON.parse(deps.store.getMeta(productNamesKey(deps.sourceName)) ?? "[]"));
+    // 리포트 파일과 같은 범위: 지금 출처의 마지막 실행에서 본 글
+    const rows = deps.store.labeled(deps.classifier, deps.sourceName);
+    const report = computeReport(rows, { now: deps.now(), days: p.days, productNames: names });
+    return { period: p, report, total: rows.length };
+  }
+
+  app.get("/complaints", (c) => {
+    if (!complaints) return c.html(errorPage(ctx(), "불만 사유 리포트가 이 실행에서 꺼져 있습니다."), 404);
+    const { period, report, total } = complaintReport(c.req.query("days"));
+    return c.html(
+      complaintsPage(ctx(c.req.query("msg")), {
+        period: period.key,
+        report,
+        totalLabeled: total,
+        schedule: complaints.scheduler.status,
+        classifierLabel: complaints.classifier === "rules+llm" ? "규칙 + Claude Code(구독) + 코드 검사" : "규칙만",
+        sourceName: complaints.sourceName,
+      }),
+    );
+  });
+
+  app.get("/complaints.csv", (c) => {
+    if (!complaints) return c.text("불만 사유 리포트가 꺼져 있습니다.", 404);
+    const { period, report } = complaintReport(c.req.query("days"));
+    const file = `complaints-${kstDate(complaints.now())}-${period.key === "all" ? "all" : `${period.key}d`}.csv`;
+    return c.body(renderCsv([report]), 200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${file}"`,
+    });
+  });
+
+  app.post("/complaints/run", async (c) => {
+    if (!complaints) return c.html(errorPage(ctx(), "불만 사유 리포트가 이 실행에서 꺼져 있습니다."), 404);
+    const form = await c.req.parseBody();
+    const days = COMPLAINT_PERIODS.find((p) => p.key === form.days)?.key ?? "7";
+    // 새 글이 많으면 분류에 시간이 걸려 기다리지 않고 돌려보낸다. '만드는 중'은 화면이 상태로 보여 주고,
+    // 끝나면 admin.js가 /api/live로 알아채 다시 읽는다(주소에 문구를 남기지 않는다).
+    void complaints.scheduler.runNow();
+    return c.redirect(`/complaints${days === "7" ? "" : `?days=${days}`}`);
   });
 
   app.get("/metrics", (c) => c.html(metricsPage(ctx(), computeMetrics(store, deps.baselineMinutes))));
