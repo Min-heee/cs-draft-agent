@@ -6,6 +6,7 @@ import { ClaudeDrafter, FakeDrafter, type Drafter } from "./agent/drafter.ts";
 import { ClaudeCodeComplaintClassifier } from "./complaints/llm.ts";
 import { isOfficialSource, runComplaintJob } from "./complaints/job.ts";
 import { DailyReportScheduler, LAST_REPORT_KEY } from "./complaints/scheduler.ts";
+import { GoogleSheetsWriter } from "./complaints/sheets.ts";
 import { ComplaintStore } from "./complaints/store.ts";
 import { createCafe24Client, createComplaintSource, loadConfig, ROOT } from "./config.ts";
 import { Store } from "./db.ts";
@@ -57,6 +58,10 @@ const complaintLlm =
   config.complaintClassifier === "claude-code" ? new ClaudeCodeComplaintClassifier({ model: config.model, effort: config.effort }) : undefined;
 // 시험 파일로 돌릴 때는 정식 리포트 기록(오늘 만듦·알림)을 건드리지 않는다.
 const officialSource = isOfficialSource(complaintSource.name);
+const sheetWriter = config.googleSheet ? new GoogleSheetsWriter(config.googleSheet) : undefined;
+if (config.googleSheet && !path.relative(ROOT, config.googleSheet.keyFile).startsWith("..")) {
+  console.warn("경고: 구글 서비스 계정 키 파일이 저장소 안에 있습니다. 실수로 올라가지 않게 저장소 밖(예: ~/.config/cs-draft-agent/)으로 옮겨 주세요.");
+}
 const runComplaints = () =>
   runComplaintJob({
     source: complaintSource,
@@ -65,6 +70,7 @@ const runComplaints = () =>
     llm: complaintLlm,
     outDir: path.join(config.dataDir, "reports"),
     now,
+    sheets: sheetWriter,
   });
 const reportScheduler = new DailyReportScheduler({
   hour: config.complaintReportHour,
@@ -94,6 +100,11 @@ if (command === "sync") {
   console.log(`지난 7일: 고객 글 ${week.posts}건 중 불만 ${week.complaints}건, 확인 필요 ${week.needs_check}건`);
   for (const r of week.overall.slice(0, 5)) console.log(`  ${r.label} ${r.count}건`);
   console.log(`리포트: ${[result.files.html, result.files.csv, result.files.xlsx].map((f) => path.relative(process.cwd(), f)).join(", ")}`);
+  if (result.sheet && "url" in result.sheet) console.log(`구글시트에 썼습니다: ${result.sheet.url}`);
+  else if (result.sheet) {
+    console.error(`구글시트에 쓰지 못했습니다: ${result.sheet.error}`);
+    process.exitCode = 1;
+  } else if (!config.googleSheet) console.log("구글시트: 연결 안 됨(GOOGLE_SERVICE_ACCOUNT_FILE, GOOGLE_SHEET_ID)");
 } else if (command === "serve") {
   store.resetStuckDrafting();
   const drafterLabel = { fake: "가짜 초안", "claude-code": `Claude Code 구독(${config.model})`, claude: config.model }[config.drafter];
@@ -111,6 +122,7 @@ if (command === "sync") {
       scheduler: reportScheduler,
       sourceName: complaintSource.name,
       now: now ?? (() => new Date()),
+      sheetUrl: sheetWriter?.url ?? null,
     },
   });
   // 사내 PC에서 직원이 쓰는 화면이라 기본은 이 컴퓨터에서만 열린다. 다른 기기에서 열려면 HOST=0.0.0.0.

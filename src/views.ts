@@ -634,6 +634,8 @@ export interface ComplaintsView {
   schedule: ReportSchedule;
   classifierLabel: string;
   sourceName: string;
+  /** 구글시트에 같이 쓰면 주소, 마지막으로 쓴 시각, 마지막 실패 이유 */
+  sheet: { url: string; writtenAt: string | null; error: { at: string; message: string } | null } | null;
 }
 
 /** 불만 사유 리포트. 순위는 DB에 저장된 분류 결과로 화면을 열 때마다 다시 계산한다(LLM은 부르지 않는다). */
@@ -659,9 +661,18 @@ export function complaintsPage(ctx: PageContext, v: ComplaintsView) {
     <button class="primary" type="submit"${schedule.running ? html` disabled` : ""}>${schedule.running ? "만드는 중…" : "지금 만들기"}</button>
   </form>
 </div>
-<p class="muted small">${when} 마지막 리포트 ${schedule.lastDate ?? "없음"} · 자료 ${v.sourceName} · 분류 ${v.classifierLabel}</p>
+<p class="muted small">${when} 마지막 리포트 ${schedule.lastDate ?? "없음"} · 자료 ${v.sourceName} · 분류 ${v.classifierLabel} · ${
+    v.sheet
+      ? html`구글시트 연결됨(${v.sheet.writtenAt ? `마지막으로 씀 ${shortTime(v.sheet.writtenAt)}` : "아직 안 씀"}) <a href="${v.sheet.url}" target="_blank" rel="noopener">시트 열기</a>`
+      : "구글시트 연결 안 됨"
+  }</p>
 ${schedule.running ? html`<div class="notice" role="status">리포트를 만드는 중입니다. 끝나면 화면이 저절로 바뀝니다.</div>` : ""}
 ${schedule.lastError ? html`<div class="notice danger" role="alert"><strong>리포트를 만들지 못했습니다.</strong> ${schedule.lastError}</div>` : ""}
+${
+  v.sheet?.error
+    ? html`<div class="notice danger" role="alert"><strong>구글시트에 쓰지 못했습니다(${shortTime(v.sheet.error.at)}).</strong> ${v.sheet.error.message} 리포트 파일은 만들어졌고, 다음에 만들 때 다시 씁니다.</div>`
+    : ""
+}
 ${
   r.fallback || schedule.lastWarning
     ? html`<div class="notice warn" role="status"><strong>Claude 분류 실패 ${r.fallback}건</strong>은 규칙 결과로 두었고 다음에 만들 때 다시 분류합니다.${schedule.lastWarning ? html` (${schedule.lastWarning})` : ""}</div>`

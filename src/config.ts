@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cafe24ApiClient } from "./cafe24/api.ts";
@@ -32,6 +33,8 @@ export interface AppConfig {
   complaintReportHour: number;
   /** 불만 사유 리포트가 읽을 시험 글 파일(COMPLAINT_SOURCE). 없으면 카페24(또는 목업)를 읽는다. */
   complaintSourceFile: string | null;
+  /** 불만 사유 리포트를 함께 쓸 구글시트(GOOGLE_SERVICE_ACCOUNT_FILE + GOOGLE_SHEET_ID). 둘 중 하나라도 없으면 null */
+  googleSheet: { keyFile: string; spreadsheetId: string; problem?: string } | null;
 }
 
 function oneOf<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {
@@ -66,7 +69,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     complaintReportHour: reportHour(env.COMPLAINT_REPORT_HOUR),
     complaintSourceFile: env.COMPLAINT_SOURCE ? path.resolve(ROOT, env.COMPLAINT_SOURCE) : null,
+    googleSheet:
+      env.GOOGLE_SERVICE_ACCOUNT_FILE?.trim() && env.GOOGLE_SHEET_ID?.trim()
+        ? { keyFile: expandHome(env.GOOGLE_SERVICE_ACCOUNT_FILE.trim()), ...sheetId(env.GOOGLE_SHEET_ID.trim()) }
+        : null,
   };
+}
+
+/** "~/..."는 홈 폴더로, 나머지 상대 경로는 저장소 기준으로 */
+function expandHome(file: string): string {
+  return file.startsWith("~/") ? path.join(homedir(), file.slice(2)) : path.resolve(ROOT, file);
+}
+
+/** 시트 주소를 통째로 넣어도 ID만 꺼낸다(…/spreadsheets/d/<ID>/edit, 여러 계정이면 …/spreadsheets/u/1/d/<ID>/edit) */
+function sheetId(value: string): { spreadsheetId: string; problem?: string } {
+  if (/\/spreadsheets\/d\/e\//.test(value)) {
+    return {
+      spreadsheetId: "",
+      problem: "GOOGLE_SHEET_ID에 '웹에 게시' 링크가 들어 있습니다. 시트를 열었을 때 주소창의 편집 주소(…/d/<ID>/edit)를 넣어 주세요.",
+    };
+  }
+  return { spreadsheetId: /\/spreadsheets\/(?:u\/\d+\/)?d\/([\w-]+)/.exec(value)?.[1] ?? value };
 }
 
 function reportHour(value: string | undefined): number {

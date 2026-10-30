@@ -785,3 +785,149 @@ test("엑셀: 리포트를 만들 때 xlsx도 쓰고, 관리자 화면에서 기
   assert.ok(files.get("xl/worksheets/sheet4.xml")!.includes("셔츠"));
   assert.match(await (await appWith().request("/complaints")).text(), /엑셀 받기/);
 });
+
+// --- 구글시트 ---
+
+import { createVerify, generateKeyPairSync } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { GoogleSheetsWriter, readServiceAccountKey, sheetValue, signJwt } from "../src/complaints/sheets.ts";
+
+const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const fakeKey = { client_email: "cs-report@demo.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }).toString() };
+
+function googleFake(existingTabs: Record<string, string[] | null> = { 시트1: null }, failWith?: number[]) {
+  const calls: { url: string; method: string; body: unknown }[] = [];
+  const failures = [...(failWith ?? [])];
+  let nextId = 100;
+  const fetcher = (async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    const body = init?.body instanceof URLSearchParams ? Object.fromEntries(init.body) : init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ url, method: init?.method ?? "GET", body });
+    if (url.includes("oauth2.googleapis.com")) return Response.json({ access_token: "ya29.test", expires_in: 3600 });
+    const fail = failures.shift();
+    if (fail) return Response.json({ error: { message: "The caller does not have permission" } }, { status: fail });
+    if (url.includes("values:batchGet")) {
+      const ranges = new URL(url).searchParams.getAll("ranges");
+      return Response.json({ valueRanges: ranges.map((r) => ({ values: existingTabs[r.slice(1, r.indexOf("'!"))] ? [existingTabs[r.slice(1, r.indexOf("'!"))]] : undefined })) });
+    }
+    if (init?.method === "GET") {
+      return Response.json({ sheets: Object.keys(existingTabs).map((title, i) => ({ properties: { sheetId: i + 1, title } })) });
+    }
+    if (url.endsWith(":batchUpdate") && (body as { requests?: { addSheet?: { properties: { title: string } } }[] }).requests?.[0]?.addSheet) {
+      const reqs = (body as { requests: { addSheet: { properties: { title: string } } }[] }).requests;
+      return Response.json({ replies: reqs.map((r) => ({ addSheet: { properties: { sheetId: nextId++, title: r.addSheet.properties.title } } })) });
+    }
+    return Response.json({});
+  }) as typeof fetch;
+  return { calls, fetcher };
+}
+
+test("구글시트: 서비스 계정 JWT를 RS256으로 서명한다", () => {
+  const jwt = signJwt(fakeKey, new Date("2026-10-30T00:00:00Z"));
+  const [h, c, sig] = jwt.split(".");
+  assert.ok(createVerify("RSA-SHA256").update(`${h}.${c}`).verify(publicKey, Buffer.from(sig, "base64url")));
+  const claims = JSON.parse(Buffer.from(c, "base64url").toString());
+  assert.equal(claims.iss, fakeKey.client_email);
+  assert.equal(claims.scope, "https://www.googleapis.com/auth/spreadsheets");
+  assert.equal(claims.exp - claims.iat, 3600);
+});
+
+test("구글시트: '불만 ' 탭만 만들어 RAW로 먼저 쓰고, 그 아래 옛 줄만 지우고, 비율·날짜 열에 서식을 입힌다", async () => {
+  const keyFile = path.join(dir, "key.json");
+  writeFileSync(keyFile, JSON.stringify(fakeKey));
+  // 사람이 쓰던 '요약' 탭은 이름이 달라 건드리지 않는다. '불만 요약'은 지난번에 우리가 만든 탭(첫 줄이 우리 제목 줄)
+  const { calls, fetcher } = googleFake({ 시트1: null, 요약: ["다른", "내용"], "불만 요약": ["기간", "건수"] });
+  const writer = new GoogleSheetsWriter({ keyFile, spreadsheetId: "abc123", fetch: fetcher });
+  const result = await writer.writeSheets([
+    { name: "요약", rows: [["기간", "건수"], ["지난 7일", 3]] },
+    { name: "글별 분류", rows: [["시각", "비율", "인용"], [{ date: new Date("2026-10-27T05:30:00Z") }, { percent: 0.214 }, '=HYPERLINK("x") 😀'.slice(0, 18)]] },
+    { name: "It's", rows: [["x"]] },
+  ]);
+  assert.equal(result.url, "https://docs.google.com/spreadsheets/d/abc123/edit");
+  assert.deepEqual(result.tabs, ["불만 요약", "불만 글별 분류", "불만 It's"]);
+  const kinds = calls.map((c) => (c.url.includes("oauth2") ? "token" : `${c.method} ${new URL(c.url).pathname.split("/").pop()}`));
+  assert.deepEqual(kinds, ["token", "GET abc123", "GET values:batchGet", "POST abc123:batchUpdate", "POST values:batchUpdate", "POST values:batchClear", "POST abc123:batchUpdate"]);
+  const add = calls[3].body as { requests: { addSheet: { properties: { title: string } } }[] };
+  assert.deepEqual(add.requests.map((r) => r.addSheet.properties.title), ["불만 글별 분류", "불만 It's"]);
+  const update = calls[4].body as { valueInputOption: string; data: { range: string; values: unknown[][] }[] };
+  assert.equal(update.valueInputOption, "RAW");
+  const [date, ratio, quote] = update.data[1].values[1] as [number, number, string];
+  assert.ok(Math.abs(date - (46322 + 14.5 / 24)) < 1e-6);
+  assert.equal(ratio, 0.214);
+  assert.ok(quote.startsWith("=HYPERLINK") && quote.isWellFormed());
+  assert.deepEqual((calls[5].body as { ranges: string[] }).ranges, ["'불만 요약'!A3:ZZ", "'불만 글별 분류'!A3:ZZ", "'불만 It''s'!A2:ZZ"]);
+  const formats = (calls[6].body as { requests: { repeatCell: { range: { sheetId: number; startColumnIndex: number }; cell: { userEnteredFormat: { numberFormat: { type: string } } } } }[] }).requests;
+  assert.deepEqual(formats.map((f) => [f.repeatCell.range.sheetId, f.repeatCell.range.startColumnIndex, f.repeatCell.cell.userEnteredFormat.numberFormat.type]), [[100, 0, "DATE_TIME"], [100, 1, "PERCENT"]]);
+  // 두 번째 쓰기는 토큰을 다시 받지 않는다
+  await writer.writeSheets([{ name: "요약", rows: [["기간", "건수"]] }]);
+  assert.equal(calls.filter((c) => c.url.includes("oauth2")).length, 1);
+  assert.equal(sheetValue(null), "");
+});
+
+test("구글시트: 같은 이름의 탭이 사람 것이면 아무것도 쓰지 않고, 잠깐 오류는 다시 시도한다", async () => {
+  const keyFile = path.join(dir, "key.json");
+  writeFileSync(keyFile, JSON.stringify(fakeKey));
+  const foreign = googleFake({ "불만 요약": ["이름", "메모"] });
+  await assert.rejects(
+    new GoogleSheetsWriter({ keyFile, spreadsheetId: "abc", fetch: foreign.fetcher }).writeSheets([{ name: "요약", rows: [["기간", "건수"]] }]),
+    /같은 이름의 탭\(불만 요약\).*쓰지 않았습니다/,
+  );
+  assert.ok(!foreign.calls.some((c) => c.method === "POST" && !c.url.includes("oauth2")), "아무것도 쓰지 않는다");
+  const flaky = googleFake({}, [503, 429]);
+  await new GoogleSheetsWriter({ keyFile, spreadsheetId: "abc", fetch: flaky.fetcher, retryDelayMs: 0 }).writeSheets([{ name: "요약", rows: [["x"]] }]);
+  assert.equal(flaky.calls.filter((c) => c.method === "GET" && !c.url.includes("values")).length, 3);
+  await assert.rejects(
+    new GoogleSheetsWriter({ keyFile, spreadsheetId: "", problem: "웹에 게시 링크입니다", fetch: flaky.fetcher }).writeSheets([]),
+    /웹에 게시/,
+  );
+});
+
+test("구글시트: 권한이 없으면 할 일을 알려 주고, 키 파일이 틀려도 내용을 오류에 넣지 않는다", async () => {
+  const keyFile = path.join(dir, "key.json");
+  writeFileSync(keyFile, JSON.stringify(fakeKey));
+  const { fetcher } = googleFake({}, [403]);
+  await assert.rejects(new GoogleSheetsWriter({ keyFile, spreadsheetId: "abc", fetch: fetcher }).writeSheets([{ name: "요약", rows: [["x"]] }]), /편집자.*공유/);
+  const bad = path.join(dir, "bad.json");
+  writeFileSync(bad, '{"private_key": "-----BEGIN PRIVATE KEY-----SECRETSECRET');
+  assert.throws(() => readServiceAccountKey(bad), (e: Error) => /JSON 형식이 아닙니다/.test(e.message) && !e.message.includes("SECRET"));
+  assert.throws(() => readServiceAccountKey(path.join(dir, "none.json")), /열지 못했습니다/);
+});
+
+test("구글시트: 실제 카페24 자료로 만들 때만 같은 탭을 쓰고, 실패해도 파일은 남기고 이유를 따로 남긴다", async () => {
+  const items = [post({ key: "a:4:81", content: "단추가 없어요", created_date: "2026-10-25T10:00:00+09:00" })];
+  const official: ComplaintSource = { name: "cafe24", listPosts: async () => items, productNames: async () => new Map() };
+  const written: string[][] = [];
+  const ok = { writeSheets: async (s: { name: string }[]) => (written.push(s.map((x) => x.name)), { url: "https://docs.google.com/spreadsheets/d/x/edit" }) };
+  const outDir = path.join(dir, "reports");
+  const now = () => new Date("2026-10-27T00:00:00Z");
+  const r1 = await runComplaintJob({ source: official, complaints, outDir, now, sheets: ok });
+  assert.deepEqual(written[0], ["요약", "사유 순위", "상품별", "글별 분류", "정보"]);
+  assert.deepEqual(r1.sheet, { url: "https://docs.google.com/spreadsheets/d/x/edit" });
+  assert.ok(complaints.getMeta("complaints_sheet_written"));
+  const broken = { writeSheets: async () => { throw new Error("구글시트 403: 권한 없음"); } };
+  const r2 = await runComplaintJob({ source: official, complaints, outDir, now, sheets: broken });
+  assert.ok(existsSync(r2.files.xlsx));
+  // 시트 실패는 Claude 경고와 섞지 않고 따로 남긴다
+  assert.equal(r2.warning, null);
+  assert.deepEqual(r2.sheet, { error: "구글시트 403: 권한 없음" });
+  assert.match(complaints.getMeta("complaints_sheet_error") ?? "", /권한 없음/);
+  await runComplaintJob({ source: official, complaints, outDir, now, sheets: ok });
+  assert.equal(complaints.getMeta("complaints_sheet_error"), "");
+  // 목업 시연과 시험 파일은 실제 시트를 덮지 않는다
+  for (const name of ["mock", "file:dev.json"]) {
+    const other: ComplaintSource = { name, listPosts: async () => items, productNames: async () => new Map() };
+    assert.equal((await runComplaintJob({ source: other, complaints, outDir, now, sheets: ok })).sheet, null);
+  }
+  assert.equal(written.length, 2);
+});
+
+test("설정: 구글시트는 키 파일과 시트 ID가 둘 다 있을 때만, 시트 주소를 통째로 넣어도 ID만 쓴다", () => {
+  assert.equal(loadConfig({ GOOGLE_SHEET_ID: "abc" }).googleSheet, null);
+  const g = loadConfig({ GOOGLE_SERVICE_ACCOUNT_FILE: "~/keys/g.json", GOOGLE_SHEET_ID: "https://docs.google.com/spreadsheets/d/1AbC-d_E/edit#gid=0" }).googleSheet!;
+  assert.equal(g.spreadsheetId, "1AbC-d_E");
+  assert.ok(g.keyFile.endsWith("/keys/g.json") && !g.keyFile.includes("~"));
+  const multi = loadConfig({ GOOGLE_SERVICE_ACCOUNT_FILE: "k.json", GOOGLE_SHEET_ID: "https://docs.google.com/spreadsheets/u/1/d/1XyZ/edit" }).googleSheet!;
+  assert.equal(multi.spreadsheetId, "1XyZ");
+  const pub = loadConfig({ GOOGLE_SERVICE_ACCOUNT_FILE: "k.json", GOOGLE_SHEET_ID: "https://docs.google.com/spreadsheets/d/e/2PACX-1v/pubhtml" }).googleSheet!;
+  assert.match(pub.problem ?? "", /웹에 게시/);
+});

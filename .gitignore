@@ -5,6 +5,11 @@ data/*.db-*
 data/cafe24-token.json
 data/*.log
 
+# 구글 서비스 계정 키는 저장소 밖에 두지만, 실수로 안에 둬도 올라가지 않게
+*service-account*.json
+*google-key*.json
+*-sa-key.json
+keys/
 # 불만 사유 리포트(U-7): 만든 리포트와 시험 글은 올리지 않는다
 data/reports/
 data/complaint-eval/*

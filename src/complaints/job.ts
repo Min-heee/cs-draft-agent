@@ -2,7 +2,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Store } from "../db.ts";
 import { classifyPosts, type BatchClassifier } from "./classify.ts";
-import { renderXlsx } from "./excel.ts";
+import { complaintSheets } from "./excel.ts";
+import { buildXlsx, type Sheet } from "./xlsx.ts";
 import { computeReport, inPeriod, kstDate, renderCsv, renderHtml, type ComplaintReport } from "./report.ts";
 import type { ComplaintSource } from "./source.ts";
 import { productNamesKey, type ComplaintStore } from "./store.ts";
@@ -23,6 +24,8 @@ export interface ComplaintJobDeps {
   outDir: string;
   now?: () => Date;
   minRise?: number;
+  /** 구글시트(설정했을 때만). 엑셀과 같은 탭을 시트에도 쓴다. 실제 카페24 자료일 때만 쓴다(목업 시연이 시트를 덮지 않게). */
+  sheets?: { writeSheets(sheets: Sheet[]): Promise<{ url: string }> };
 }
 
 export interface ComplaintJobResult {
@@ -36,6 +39,8 @@ export interface ComplaintJobResult {
   warning: string | null;
   reports: ComplaintReport[];
   files: { html: string; csv: string; xlsx: string };
+  /** 구글시트에 썼으면 그 주소, 실패했으면 이유. 설정하지 않았으면 null */
+  sheet: { url: string } | { error: string } | null;
   tokens: { input: number; output: number };
   seconds: number;
 }
@@ -58,6 +63,10 @@ export function reportNotes(source: string, classifier: Classifier): string[] {
 }
 
 const riseKey = (source: string, date: string) => `complaints_rise:${source}:${date}`;
+/** 구글시트에 마지막으로 쓴 시각(관리자 화면에 보여 준다) */
+export const SHEET_WRITTEN_KEY = "complaints_sheet_written";
+/** 구글시트에 쓰지 못한 이유와 시각(JSON). 성공하면 비운다. */
+export const SHEET_ERROR_KEY = "complaints_sheet_error";
 
 export async function runComplaintJob(deps: ComplaintJobDeps): Promise<ComplaintJobResult> {
   const started = performance.now();
@@ -105,10 +114,28 @@ export async function runComplaintJob(deps: ComplaintJobDeps): Promise<Complaint
   writeFileSync(files.html, renderHtml({ reports, source, notes: reportNotes(source, classifier) }));
   writeFileSync(files.csv, renderCsv(reports));
   // 엑셀의 '글별 분류' 시트에는 지난 30일 글을 넣는다(필터로 거르기 좋게).
-  writeFileSync(
-    files.xlsx,
-    renderXlsx({ reports, posts: inPeriod(rows, now, 30), productNames: names, source, notes: reportNotes(source, classifier) }),
-  );
+  const sheets = complaintSheets({
+    reports,
+    posts: inPeriod(rows, now, 30),
+    productNames: names,
+    source,
+    notes: reportNotes(source, classifier),
+  });
+  writeFileSync(files.xlsx, buildXlsx(sheets));
+
+  // 구글시트는 실패해도 리포트 파일은 그대로 두고, 실패 이유를 따로 남긴다(관리자 화면이 보여 주고, 다음 실행 때 다시 쓴다).
+  let sheet: ComplaintJobResult["sheet"] = null;
+  if (deps.sheets && source === "cafe24") {
+    try {
+      sheet = { url: (await deps.sheets.writeSheets(sheets)).url };
+      deps.complaints.setMeta(SHEET_WRITTEN_KEY, new Date().toISOString());
+      deps.complaints.setMeta(SHEET_ERROR_KEY, "");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sheet = { error: message };
+      deps.complaints.setMeta(SHEET_ERROR_KEY, JSON.stringify({ at: new Date().toISOString(), message }));
+    }
+  }
 
   // 같은 날 다시 만들어도(지금 만들기, CLI) 이미 알린 사유는 건수가 늘었을 때만 다시 알린다.
   if (deps.app) {
@@ -134,6 +161,7 @@ export async function runComplaintJob(deps: ComplaintJobDeps): Promise<Complaint
     warning,
     reports,
     files,
+    sheet,
     tokens: { input, output },
     seconds: Math.round((performance.now() - started) / 100) / 10,
   };

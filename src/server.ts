@@ -5,7 +5,7 @@ import { ROOT } from "./config.ts";
 import type { DraftRow, InquiryRow, InquiryStatus, Store } from "./db.ts";
 import { computeMetrics } from "./metrics.ts";
 import { renderXlsx } from "./complaints/excel.ts";
-import { reportNotes } from "./complaints/job.ts";
+import { reportNotes, SHEET_ERROR_KEY, SHEET_WRITTEN_KEY } from "./complaints/job.ts";
 import { computeReport, inPeriod, kstDate, renderCsv } from "./complaints/report.ts";
 import type { DailyReportScheduler } from "./complaints/scheduler.ts";
 import { productNamesKey, type ComplaintStore } from "./complaints/store.ts";
@@ -49,6 +49,8 @@ export interface ComplaintsDeps {
   scheduler: DailyReportScheduler;
   sourceName: string;
   now: () => Date;
+  /** 구글시트에 같이 쓰면 그 주소. 연결하지 않았으면 null */
+  sheetUrl?: string | null;
 }
 
 const TAB_STATUSES: Record<InboxTab, InquiryStatus[]> = {
@@ -286,6 +288,13 @@ export function createApp(deps: AppDeps): Hono {
         schedule: complaints.scheduler.status,
         classifierLabel: complaints.classifier === "rules+llm" ? "규칙 + Claude Code(구독) + 코드 검사" : "규칙만",
         sourceName: complaints.sourceName,
+        sheet: complaints.sheetUrl
+          ? {
+              url: complaints.sheetUrl,
+              writtenAt: complaints.store.getMeta(SHEET_WRITTEN_KEY),
+              error: JSON.parse(complaints.store.getMeta(SHEET_ERROR_KEY) || "null") as { at: string; message: string } | null,
+            }
+          : null,
       }),
     );
   });

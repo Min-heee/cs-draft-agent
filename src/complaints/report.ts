@@ -104,7 +104,8 @@ function ranked(current: LabeledPost[], previous: LabeledPost[] | null): ReasonC
 export function quoteOf({ post, label }: LabeledPost): Quote {
   const evidence = label.classifier === "rules+llm" ? label.reasons.map((r) => r.evidence).find((e) => e.length >= 4) : undefined;
   const base = evidence ?? `${post.title} ${post.content}`.trim();
-  const text = maskPersonalInfo(base.replace(/\s+/g, " ")).slice(0, 90);
+  // 이모지가 반으로 잘리지 않게 글자(코드 포인트) 단위로 자른다.
+  const text = Array.from(maskPersonalInfo(base.replace(/\s+/g, " "))).slice(0, 90).join("");
   return { text, kind: post.kind, rating: post.rating, created_date: post.created_date };
 }
 
@@ -148,7 +149,7 @@ export function computeReport(rows: LabeledPost[], options: ReportOptions): Comp
       product: nameOf(r.post.product_no),
       reasons: r.label.reasons.map((x) => reasonKeyLabel(reasonKey(x))),
       why: r.label.check_reasons,
-      text: maskPersonalInfo(`${r.post.title} ${r.post.content}`.replace(/\s+/g, " ").trim()).slice(0, 90),
+      text: Array.from(maskPersonalInfo(`${r.post.title} ${r.post.content}`.replace(/\s+/g, " ").trim())).slice(0, 90).join(""),
       kind: r.post.kind,
       created_date: r.post.created_date,
       fallback: r.label.fallback,
