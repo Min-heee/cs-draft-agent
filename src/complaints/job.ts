@@ -2,12 +2,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Store } from "../db.ts";
 import { classifyPosts, type BatchClassifier } from "./classify.ts";
-import { computeReport, kstDate, renderCsv, renderHtml, type ComplaintReport } from "./report.ts";
+import { renderXlsx } from "./excel.ts";
+import { computeReport, inPeriod, kstDate, renderCsv, renderHtml, type ComplaintReport } from "./report.ts";
 import type { ComplaintSource } from "./source.ts";
 import { productNamesKey, type ComplaintStore } from "./store.ts";
 import type { Classifier } from "./types.ts";
 
-// 리포트 한 번 만들기: 고객 글 읽기(GET만) → 새 글·바뀐 글만 분류해 저장 → 7일·30일 리포트 계산 → HTML·CSV 쓰기
+// 리포트 한 번 만들기: 고객 글 읽기(GET만) → 새 글·바뀐 글만 분류해 저장 → 7일·30일 리포트 계산 → HTML·CSV·엑셀 쓰기
 // → 늘어난 사유가 있으면 관리자 화면 알림. 쇼핑몰에는 아무것도 쓰지 않는다.
 
 export interface ComplaintJobDeps {
@@ -34,7 +35,7 @@ export interface ComplaintJobResult {
   /** 대신 채운 글이 있을 때 첫 이유(예: 로그인 만료). 관리자 화면에 보여 준다. */
   warning: string | null;
   reports: ComplaintReport[];
-  files: { html: string; csv: string };
+  files: { html: string; csv: string; xlsx: string };
   tokens: { input: number; output: number };
   seconds: number;
 }
@@ -99,9 +100,15 @@ export async function runComplaintJob(deps: ComplaintJobDeps): Promise<Complaint
   const files = {
     html: path.join(deps.outDir, `complaints-${date}${tag}.html`),
     csv: path.join(deps.outDir, `complaints-${date}${tag}.csv`),
+    xlsx: path.join(deps.outDir, `complaints-${date}${tag}.xlsx`),
   };
   writeFileSync(files.html, renderHtml({ reports, source, notes: reportNotes(source, classifier) }));
   writeFileSync(files.csv, renderCsv(reports));
+  // 엑셀의 '글별 분류' 시트에는 지난 30일 글을 넣는다(필터로 거르기 좋게).
+  writeFileSync(
+    files.xlsx,
+    renderXlsx({ reports, posts: inPeriod(rows, now, 30), productNames: names, source, notes: reportNotes(source, classifier) }),
+  );
 
   // 같은 날 다시 만들어도(지금 만들기, CLI) 이미 알린 사유는 건수가 늘었을 때만 다시 알린다.
   if (deps.app) {

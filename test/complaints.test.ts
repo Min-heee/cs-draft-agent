@@ -7,7 +7,7 @@ import { classifyPosts, evidenceFound, type BatchClassifier } from "../src/compl
 import { runComplaintJob } from "../src/complaints/job.ts";
 import { ClaudeCodeComplaintClassifier, llmJsonSchema } from "../src/complaints/llm.ts";
 import { maskPersonalInfo } from "../src/complaints/mask.ts";
-import { computeReport, kstDate, renderCsv, renderHtml } from "../src/complaints/report.ts";
+import { computeReport, inPeriod, kstDate, renderCsv, renderHtml } from "../src/complaints/report.ts";
 import { classifyByRules, hasInjection, rulesReasons } from "../src/complaints/rules.ts";
 import { DailyReportScheduler } from "../src/complaints/scheduler.ts";
 import { Cafe24ComplaintSource, MockComplaintSource, type ComplaintSource } from "../src/complaints/source.ts";
@@ -107,10 +107,14 @@ test("가리기: 하이픈 없는 번호, +82, 띄어 쓴 전화, 시·도 없�
     ["테헤란로 123으로 보내 주세요", "[주소]"],
     ["중앙로45번길 12 상가", "[주소]"],
     ["101동 1203호", "[주소]"],
+    ["입금자명 박영희로 보냈어요", "입금자명 [가림]"],
+    ["받는 분 김철수, 카톡 아이디 abc_123", "카톡 아이디 [가림]"],
+    ["주문자: 홍길동", "주문자 [가림]"],
+    ["인스타 @shop_lover 팔로우", "[가림]"],
   ];
   for (const [text, mark] of cases) assert.ok(maskPersonalInfo(text).includes(mark), text);
   // 사이즈·수량 표현은 주소로 보지 않는다
-  for (const keep of ["사이즈로 2XL 주세요", "택배로 2개 왔어요", "3번 출구로 5분", "기장 길 3cm 줄였어요"]) {
+  for (const keep of ["사이즈로 2XL 주세요", "택배로 2개 왔어요", "3번 출구로 5분", "기장 길 3cm 줄였어요", "아이디어 좋네요", "카톡으로 연락 주세요", "OUTSIDE 가방", "이름이 너무 길어요"]) {
     assert.equal(maskPersonalInfo(keep), keep);
   }
 });
@@ -639,4 +643,145 @@ test("불만 사유 탭: '지금 만들기'는 기다리지 않고 돌려보내�
   assert.equal((await appWith(false).request("/complaints")).status, 404);
   assert.equal(notificationLink({ article_no: null, type: "complaint_rise" }), "/complaints");
   assert.equal(notificationLink({ article_no: null, type: "sync_failed" }), "/notifications");
+});
+
+// --- 엑셀 ---
+
+import { crc32 } from "node:zlib";
+import { complaintSheets, renderXlsx } from "../src/complaints/excel.ts";
+import { buildXlsx } from "../src/complaints/xlsx.ts";
+
+/** 압축하지 않은(stored) zip을 풀어 파일 이름 → 내용. CRC도 확인한다. */
+function unzip(buf: Buffer): Map<string, string> {
+  const files = new Map<string, string>();
+  let at = 0;
+  while (buf.readUInt32LE(at) === 0x04034b50) {
+    const crc = buf.readUInt32LE(at + 14);
+    const size = buf.readUInt32LE(at + 18);
+    const nameLen = buf.readUInt16LE(at + 26);
+    const extra = buf.readUInt16LE(at + 28);
+    const name = buf.subarray(at + 30, at + 30 + nameLen).toString("utf8");
+    const data = buf.subarray(at + 30 + nameLen + extra, at + 30 + nameLen + extra + size);
+    assert.equal(crc32(data), crc, `${name} CRC`);
+    files.set(name, data.toString("utf8"));
+    at += 30 + nameLen + extra + size;
+  }
+  assert.equal(buf.readUInt32LE(buf.length - 22), 0x06054b50, "zip 끝 표시");
+  return files;
+}
+
+test("엑셀: 글자는 수식이 아닌 글자로, 특수문자·제어문자는 안전하게, 비율은 % 형식, 시트 이름은 규칙대로", () => {
+  const buf = buildXlsx([
+    {
+      name: "글별/분류[1]",
+      rows: [
+        ["제목", "비율"],
+        ['=HYPERLINK("x") <b>&', { percent: 0.25 }],
+        ["줄\n바꿈\u0001", 3],
+        ["a_x0041_b", { date: new Date("2026-10-27T05:30:00Z") }],
+      ],
+    },
+    { name: "글별/분류[1]", rows: [["같은 이름"]] },
+    { name: "가".repeat(40), rows: [["긴 이름"]] },
+  ]);
+  const files = unzip(buf);
+  for (const part of ["[Content_Types].xml", "_rels/.rels", "xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/styles.xml", "xl/worksheets/sheet3.xml"]) {
+    assert.ok(files.has(part), part);
+  }
+  const sheet1 = files.get("xl/worksheets/sheet1.xml")!;
+  assert.ok(!sheet1.includes("<f>"), "수식을 만들지 않는다");
+  assert.ok(sheet1.includes("=HYPERLINK(&quot;x&quot;) &lt;b&gt;&amp;"));
+  assert.ok(sheet1.includes('<c r="B2" s="2"><v>0.25</v></c>'));
+  // =로 시작하는 글은 셀을 고쳐 Enter를 눌러도 수식이 되지 않게 글자로 고정(s=4)
+  assert.ok(sheet1.includes('<c r="A2" t="inlineStr" s="4">'));
+  assert.ok(sheet1.includes("줄\n바꿈<") && !sheet1.includes("\u0001"));
+  // _x0041_ 같은 글자는 엑셀이 풀지 않게 _를 _x005F_로
+  assert.ok(sheet1.includes("a_x005F_x0041_b"));
+  // 날짜는 한국 시각 14:30의 엑셀 일련번호(날짜 형식 s=6)
+  const serial = Number(/<c r="B4" s="6"><v>([\d.]+)<\/v><\/c>/.exec(sheet1)?.[1]);
+  assert.ok(Math.abs(serial - (46322 + 14.5 / 24)) < 1e-6, String(serial));
+  assert.ok(sheet1.includes('<pane ySplit="1"') && sheet1.includes('<autoFilter ref="A1:B4"/>'));
+  assert.ok(files.get("xl/styles.xml")!.includes('formatCode="yyyy-mm-dd hh:mm"'));
+  const workbook = files.get("xl/workbook.xml")!;
+  const names = [...workbook.matchAll(/<sheet name="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(names.slice(0, 2), ["글별 분류 1", "글별 분류 1 2"]);
+  assert.equal(names[2].length, 31);
+  // 31자에서 이모지가 반으로 잘리지 않는다
+  const emoji = unzip(buildXlsx([{ name: "가".repeat(30) + "😀끝", rows: [["x"]] }])).get("xl/workbook.xml")!;
+  assert.ok(emoji.includes(`name="${"가".repeat(30)}"`));
+});
+
+test("엑셀: 리포트 시트 넷, 글별 분류에는 가린 인용만 넣고 작성자 이름은 넣지 않는다", () => {
+  const now = new Date("2026-10-27T00:00:00Z");
+  const rows: LabeledPost[] = [
+    { post: post({ writer: "김*수", content: "단추가 없어요 010-1234-5678", created_date: "2026-10-25T10:00:00+09:00" }), label: label({ reasons: defect() }) },
+    { post: post({ writer: "박*민", product_no: null, kind: "qna", rating: null, content: "좋아요", created_date: "2026-10-24T10:00:00+09:00" }), label: label({ needs_check: true, check_reasons: ["확신도 낮음"] }) },
+  ];
+  const names = new Map([[101, "옥스포드 셔츠"]]);
+  const reports = [7, 30].map((days) => computeReport(rows, { now, days, productNames: names }));
+  const input = { reports, posts: rows, productNames: names, source: "mock", notes: ["자료: 시연용 글"] };
+  const sheets = complaintSheets(input);
+  assert.deepEqual(sheets.map((s) => s.name), ["요약", "사유 순위", "상품별", "글별 분류", "정보"]);
+  assert.deepEqual(sheets[0].rows[1], ["지난 7일", 2, 1, 1, 1, 0]);
+  const byPost = sheets[3].rows;
+  assert.equal(byPost.length, 3);
+  assert.deepEqual(byPost[1][0], { date: new Date("2026-10-25T10:00:00+09:00") });
+  assert.deepEqual(byPost[1].slice(1, 8), ["후기", 101, "옥스포드 셔츠", 4, "예", "불량(단추·지퍼·봉제)", ""]);
+  // 인용은 리포트처럼 짧은 근거 구절(가림)
+  assert.equal(byPost[1][10], "단추가 없어요");
+  assert.equal(byPost[2][3], "상품 미지정");
+  assert.equal(byPost[2][7], "예");
+  // 확인 필요 글은 짧게 인용하고, 불만도 확인 필요도 아닌 글은 본문을 넣지 않는다
+  assert.equal(byPost[2][10], "좋아요");
+  const quiet = complaintSheets({ ...input, posts: [{ post: post({ content: "평범한 칭찬 글 010-1111-2222" }), label: label() }] });
+  assert.equal(quiet[3].rows[1][10], "");
+  const all = JSON.stringify(sheets);
+  assert.ok(!all.includes("1234-5678"));
+  assert.ok(!all.includes("김*수") && !all.includes("박*민"));
+  assert.deepEqual(sheets[4].rows.map((r) => r[0]), ["항목", "기준 시각(한국)", "자료", "분류", "만든 시각(한국)", "안내"]);
+  assert.equal(sheets[4].rows[2][1], "mock");
+  const files = unzip(renderXlsx(input));
+  assert.ok(files.get("xl/worksheets/sheet4.xml")!.includes("옥스포드 셔츠"));
+});
+
+test("엑셀: 글별 분류는 매일 파일은 30일, 화면에서 받을 때는 고른 기간의 글만 넣는다", async () => {
+  const now = new Date("2026-10-27T00:00:00Z");
+  const ago = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
+  const items = [2, 20, 60].map((d, i) => post({ key: `a:4:6${i}`, content: "단추가 없어요", created_date: ago(d) }));
+  items.push(post({ key: "a:4:69", content: "단추가 없어요", created_date: ago(-1) })); // 기준 시각보다 뒤
+  const source: ComplaintSource = { name: "mock", listPosts: async () => items, productNames: async () => new Map() };
+  const result = await runComplaintJob({ source, complaints, outDir: path.join(dir, "reports"), now: () => now });
+  const rowsIn = (xml: string) => (xml.match(/<row /g) ?? []).length - 1;
+  assert.equal(rowsIn(unzip(readFileSync(result.files.xlsx)).get("xl/worksheets/sheet4.xml")!), 2);
+  const app = appWith();
+  for (const [query, n, tag] of [["", 1, "7d"], ["?days=30", 2, "30d"], ["?days=all", 3, "all"]] as const) {
+    const res = await app.request(`/complaints.xlsx${query}`);
+    assert.match(res.headers.get("content-disposition") ?? "", new RegExp(`-${tag}\\.xlsx`));
+    assert.equal(rowsIn(unzip(Buffer.from(await res.arrayBuffer())).get("xl/worksheets/sheet4.xml")!), n, query);
+  }
+  const rows = complaints.labeled("rules", "mock");
+  for (const d of [7, 30, null]) assert.equal(inPeriod(rows, now, d).length, computeReport(rows, { now, days: d }).posts);
+});
+
+test("관리자 화면은 이 컴퓨터 이름으로 온 요청만 받는다(다른 사이트가 DNS를 돌려 읽지 못하게)", async () => {
+  const app = appWith();
+  assert.equal((await app.request("/complaints", { headers: { Host: "evil.example:3000" } })).status, 403);
+  assert.equal((await app.request("/complaints.xlsx", { headers: { Host: "evil.example:3000" } })).status, 403);
+  assert.equal((await app.request("/complaints", { headers: { Host: "localhost:3000" } })).status, 200);
+  assert.equal((await app.request("/complaints", { headers: { Host: "127.0.0.1:3000" } })).status, 200);
+});
+
+test("엑셀: 리포트를 만들 때 xlsx도 쓰고, 관리자 화면에서 기간별로 받는다", async () => {
+  const items = [post({ key: "a:4:51", content: "단추가 없어요", created_date: "2026-10-25T10:00:00+09:00" })];
+  const source: ComplaintSource = { name: "mock", listPosts: async () => items, productNames: async () => new Map([[101, "셔츠"]]) };
+  const result = await runComplaintJob({ source, complaints, outDir: path.join(dir, "reports"), now: () => new Date("2026-10-27T00:00:00Z") });
+  assert.ok(result.files.xlsx.endsWith("complaints-2026-10-27.xlsx"));
+  assert.equal(readFileSync(result.files.xlsx).readUInt32LE(0), 0x04034b50);
+  const res = await appWith().request("/complaints.xlsx?days=30");
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  assert.match(res.headers.get("content-disposition") ?? "", /complaints-2026-10-27-30d\.xlsx/);
+  const files = unzip(Buffer.from(await res.arrayBuffer()));
+  assert.ok(files.get("xl/worksheets/sheet4.xml")!.includes("셔츠"));
+  assert.match(await (await appWith().request("/complaints")).text(), /엑셀 받기/);
 });

@@ -50,7 +50,7 @@ if (config.drafter === "fake") {
 }
 const pipeline = new Pipeline(store, cafe24, drafter, config.concurrency);
 
-// 불만 사유 리포트(U-7): 고객 글을 GET으로만 읽어 사유를 나누고 data/reports에 HTML·CSV를 쓴다.
+// 불만 사유 리포트(U-7): 고객 글을 GET으로만 읽어 사유를 나누고 data/reports에 HTML·CSV·엑셀을 쓴다.
 const complaints = new ComplaintStore(store.db);
 const complaintSource = createComplaintSource(config, cafe24);
 const complaintLlm =
@@ -93,7 +93,7 @@ if (command === "sync") {
   if (result.fallbacks) console.warn(`주의: ${result.fallbacks}건은 Claude 분류에 실패해 규칙 결과로 뒀습니다(다음 실행 때 다시 분류). ${result.warning ?? ""}`);
   console.log(`지난 7일: 고객 글 ${week.posts}건 중 불만 ${week.complaints}건, 확인 필요 ${week.needs_check}건`);
   for (const r of week.overall.slice(0, 5)) console.log(`  ${r.label} ${r.count}건`);
-  console.log(`리포트: ${path.relative(process.cwd(), result.files.html)}, ${path.relative(process.cwd(), result.files.csv)}`);
+  console.log(`리포트: ${[result.files.html, result.files.csv, result.files.xlsx].map((f) => path.relative(process.cwd(), f)).join(", ")}`);
 } else if (command === "serve") {
   store.resetStuckDrafting();
   const drafterLabel = { fake: "가짜 초안", "claude-code": `Claude Code 구독(${config.model})`, claude: config.model }[config.drafter];

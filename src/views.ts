@@ -652,6 +652,7 @@ export function complaintsPage(ctx: PageContext, v: ComplaintsView) {
   <nav class="seg" aria-label="기간">
     ${COMPLAINT_PERIODS.map((p) => html`<a href="/complaints${p.key === "7" ? "" : `?days=${p.key}`}" class="${p.key === v.period ? "on" : ""}">${p.label}</a>`)}
   </nav>
+  <a href="/complaints.xlsx${v.period === "7" ? "" : `?days=${v.period}`}">엑셀 받기</a>
   <a href="/complaints.csv${v.period === "7" ? "" : `?days=${v.period}`}">CSV 받기</a>
   <form method="post" action="/complaints/run" style="margin-left:auto">
     <input type="hidden" name="days" value="${v.period}">

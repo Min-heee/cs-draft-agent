@@ -4,7 +4,9 @@ import { Hono } from "hono";
 import { ROOT } from "./config.ts";
 import type { DraftRow, InquiryRow, InquiryStatus, Store } from "./db.ts";
 import { computeMetrics } from "./metrics.ts";
-import { computeReport, kstDate, renderCsv } from "./complaints/report.ts";
+import { renderXlsx } from "./complaints/excel.ts";
+import { reportNotes } from "./complaints/job.ts";
+import { computeReport, inPeriod, kstDate, renderCsv } from "./complaints/report.ts";
 import type { DailyReportScheduler } from "./complaints/scheduler.ts";
 import { productNamesKey, type ComplaintStore } from "./complaints/store.ts";
 import type { Classifier } from "./complaints/types.ts";
@@ -69,6 +71,18 @@ function inTab(tab: InboxTab, q: InquiryRow, draft: DraftRow | undefined): boole
 
 const kindOf = (q: InquiryRow): KindFilter => q.kind ?? "qna";
 
+/** "localhost:3000" → "localhost", "[::1]:3000" → "[::1]" */
+function hostName(host: string): string {
+  return host.startsWith("[") ? host.slice(0, host.indexOf("]") + 1) : host.split(":")[0].toLowerCase();
+}
+
+function allowedHostNames(env: NodeJS.ProcessEnv = process.env): Set<string> | null {
+  const extra = (env.ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  const local = !env.HOST || ["127.0.0.1", "localhost", "::1"].includes(env.HOST);
+  if (!local && extra.length === 0) return null;
+  return new Set(["localhost", "127.0.0.1", "[::1]", ...extra]);
+}
+
 export function createApp(deps: AppDeps): Hono {
   const { store, pipeline, watcher, complaints } = deps;
   const app = new Hono();
@@ -110,7 +124,14 @@ export function createApp(deps: AppDeps): Hono {
 
   // 다른 사이트가 이 화면으로 폼을 보내지 못하게 한다(승인·등록·리포트 만들기는 모두 POST).
   // 브라우저는 POST에 Origin·Sec-Fetch-Site를 붙인다. 둘 다 없는 요청(명령줄, 시험)은 그대로 둔다.
+  // 이 컴퓨터에서만 여는 화면이라, 다른 이름(DNS를 127.0.0.1로 돌린 남의 사이트)으로 온 요청은 받지 않는다.
+  // HOST=0.0.0.0으로 다른 기기에 열 때는 ALLOWED_HOSTS에 쓸 이름을 쉼표로 적는다(비우면 검사하지 않음).
+  const allowedHosts = allowedHostNames();
   app.use("*", async (c, next) => {
+    const hostHeader = c.req.header("Host");
+    if (allowedHosts && hostHeader && !allowedHosts.has(hostName(hostHeader))) {
+      return c.text("이 주소로는 열 수 없습니다.", 403);
+    }
     if (c.req.method === "POST") {
       const site = c.req.header("Sec-Fetch-Site");
       const origin = c.req.header("Origin");
@@ -249,8 +270,9 @@ export function createApp(deps: AppDeps): Hono {
     const names = new Map<number, string>(JSON.parse(deps.store.getMeta(productNamesKey(deps.sourceName)) ?? "[]"));
     // 리포트 파일과 같은 범위: 지금 출처의 마지막 실행에서 본 글
     const rows = deps.store.labeled(deps.classifier, deps.sourceName);
-    const report = computeReport(rows, { now: deps.now(), days: p.days, productNames: names });
-    return { period: p, report, total: rows.length };
+    const now = deps.now();
+    const report = computeReport(rows, { now, days: p.days, productNames: names });
+    return { period: p, report, total: rows.length, rows: inPeriod(rows, now, p.days), names };
   }
 
   app.get("/complaints", (c) => {
@@ -274,6 +296,23 @@ export function createApp(deps: AppDeps): Hono {
     const file = `complaints-${kstDate(complaints.now())}-${period.key === "all" ? "all" : `${period.key}d`}.csv`;
     return c.body(renderCsv([report]), 200, {
       "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${file}"`,
+    });
+  });
+
+  app.get("/complaints.xlsx", (c) => {
+    if (!complaints) return c.text("불만 사유 리포트가 꺼져 있습니다.", 404);
+    const { period, report, rows, names } = complaintReport(c.req.query("days"));
+    const file = `complaints-${kstDate(complaints.now())}-${period.key === "all" ? "all" : `${period.key}d`}.xlsx`;
+    const xlsx = renderXlsx({
+      reports: [report],
+      posts: rows,
+      productNames: names,
+      source: complaints.sourceName,
+      notes: reportNotes(complaints.sourceName, complaints.classifier),
+    });
+    return c.body(new Uint8Array(xlsx), 200, {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": `attachment; filename="${file}"`,
     });
   });

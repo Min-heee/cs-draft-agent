@@ -100,12 +100,18 @@ function ranked(current: LabeledPost[], previous: LabeledPost[] | null): ReasonC
     .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
 }
 
-/** 인용문: LLM이 고른 근거 구절이 있으면 그것, 없으면 본문 앞부분. 개인정보는 가린다. */
-function quoteOf({ post, label }: LabeledPost): Quote {
+/** 인용문: LLM이 고른 근거 구절이 있으면 그것, 없으면 본문 앞부분(90자). 개인정보는 가린다. 엑셀도 같은 규칙을 쓴다. */
+export function quoteOf({ post, label }: LabeledPost): Quote {
   const evidence = label.classifier === "rules+llm" ? label.reasons.map((r) => r.evidence).find((e) => e.length >= 4) : undefined;
   const base = evidence ?? `${post.title} ${post.content}`.trim();
   const text = maskPersonalInfo(base.replace(/\s+/g, " ")).slice(0, 90);
   return { text, kind: post.kind, rating: post.rating, created_date: post.created_date };
+}
+
+/** 기간 안의 글(기준 시각부터 days일 전까지). days가 null이면 전부 */
+export function inPeriod(rows: LabeledPost[], now: Date, days: number | null): LabeledPost[] {
+  const to = now.getTime();
+  return days === null ? rows.filter((r) => Date.parse(r.post.created_date) <= to) : rows.filter((r) => inRange(r.post.created_date, to - days * DAY, to));
 }
 
 export function computeReport(rows: LabeledPost[], options: ReportOptions): ComplaintReport {
