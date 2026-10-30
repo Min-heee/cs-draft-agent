@@ -3,7 +3,7 @@ import { classifyByRules, hasInjection } from "./rules.ts";
 import { isSizeCode, reasonKey, type Reason } from "./taxonomy.ts";
 import type { Classification, ComplaintPost } from "./types.ts";
 
-// 규칙 + LLM + 코드 검사.
+// LLM + 코드 검사. 낱말 규칙은 LLM에 넘기지 않고 보조로만 쓴다(글 속 지시 찾기, LLM 실패 시 대신 채우기, '규칙만' 비교 기준).
 // LLM이 사유를 고르고, 코드가 그 결과를 확인한다:
 //   - 사유가 목록 안인지(스키마), 사이즈 사유에 부위가 있는지
 //   - 근거 구절이 원문에 정말 있는지
