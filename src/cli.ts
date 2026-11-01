@@ -51,7 +51,7 @@ if (config.drafter === "fake") {
 }
 const pipeline = new Pipeline(store, cafe24, drafter, config.concurrency);
 
-// 불만 사유 리포트(U-7): 고객 글을 GET으로만 읽어 사유를 나누고 data/reports에 HTML·CSV·엑셀을 쓴다.
+// 불만 사유 리포트: 고객 글을 GET으로만 읽어 사유를 나누고 data/reports에 HTML·CSV·엑셀을 쓴다.
 const complaints = new ComplaintStore(store.db);
 const complaintSource = createComplaintSource(config, cafe24);
 const complaintLlm =

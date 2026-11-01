@@ -4,7 +4,7 @@ import { REASON_CODES, REASON_LABELS, SIZE_PARTS } from "./taxonomy.ts";
 import type { ComplaintPost } from "./types.ts";
 
 // 로그인한 Claude Code(구독)로 글 여러 건을 한 번에 분류한다. 도구는 모두 끈다(분류에는 조회가 필요 없다).
-// API 키 경로는 쓰지 않는다(요금이 나가는 경로라 따로 승인이 필요하다).
+// API 키 경로는 쓰지 않는다(요금이 나가는 경로다).
 
 export const LlmResultSchema = z.object({
   results: z.array(

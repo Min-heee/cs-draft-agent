@@ -17,7 +17,7 @@ export interface SizeChart {
   product_no: number;
   kind: GarmentKind;
   fit_note: string;
-  /** 바지: 기본 기장(총장)이 수선 없이 맞는 키 범위(cm). MD가 정한다. */
+  /** 바지: 기본 기장(총장)이 수선 없이 맞는 키 범위(cm). 상품 담당자가 정한다. */
   length_fit_height?: [number, number];
   sizes: SizeRow[];
 }

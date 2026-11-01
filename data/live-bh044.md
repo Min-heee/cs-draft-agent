@@ -1,4 +1,4 @@
-# 초안 검토용 내보내기 (/Users/byungheemin/.openclaw/workspace/cs-draft-agent/data/live-bh044.db)
+# 초안 검토용 내보내기 (live-bh044.db)
 
 총 27건 · 비용 합계 $0.000
 

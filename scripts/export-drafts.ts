@@ -1,6 +1,7 @@
 // 초안과 도구 호출 기록을 마크다운으로 뽑는다. 프롬프트를 바꾼 뒤 결과를 비교할 때 쓴다.
 // 사용법: DB_FILE=data/eval-1.db node scripts/export-drafts.ts > data/eval-1.md
 
+import path from "node:path";
 import { loadConfig } from "../src/config.ts";
 import { Store } from "../src/db.ts";
 import { draftCostUsd } from "../src/metrics.ts";
@@ -47,6 +48,6 @@ for (const q of inquiries) {
   );
 }
 
-console.log(`# 초안 검토용 내보내기 (${config.dbFile})\n\n총 ${inquiries.length}건 · 비용 합계 $${totalCost.toFixed(3)}\n`);
+console.log(`# 초안 검토용 내보내기 (${path.basename(config.dbFile)})\n\n총 ${inquiries.length}건 · 비용 합계 $${totalCost.toFixed(3)}\n`);
 console.log(out.join("\n"));
 store.close();

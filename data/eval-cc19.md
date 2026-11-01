@@ -1,4 +1,4 @@
-# 초안 검토용 내보내기 (/Users/byungheemin/Library/Application Support/Claude/scratch-workspaces/9b1f371b-f0f0-4c68-9980-c3126ae181eb/1f514dba-a7f1-4c25-833f-6f86ce13998b/scratch-2026-10-21-cba349/cs-draft-agent/data/eval-cc19.db)
+# 초안 검토용 내보내기 (eval-cc19.db)
 
 총 16건 · 비용 합계 $0.000
 
