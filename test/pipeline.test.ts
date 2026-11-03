@@ -5,10 +5,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { FakeDrafter } from "../src/agent/drafter.ts";
+import { buildTools } from "../src/agent/tools.ts";
 import { MockCafe24Client } from "../src/cafe24/mock.ts";
 import { commentKey } from "../src/cafe24/types.ts";
 import { ROOT } from "../src/config.ts";
-import { Store } from "../src/db.ts";
+import { Store, type TraceEntry } from "../src/db.ts";
+import { PolicyStore } from "../src/knowledge/policies.ts";
+import { loadSizeCharts } from "../src/sizing.ts";
 import { computeMetrics } from "../src/metrics.ts";
 import { Pipeline } from "../src/pipeline.ts";
 import { createApp } from "../src/server.ts";
@@ -222,6 +225,76 @@ test("카페24 등록이 실패해도 승인은 남고, 다시 등록할 수 있
   cafe24.postReply = original;
   assert.equal((await pipeline.retryReply(1203)).status, "posted");
   await assert.rejects(() => pipeline.retryReply(1203), /이미 등록된/);
+});
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("다시 등록을 거의 동시에 두 번 눌러도 카페24에는 한 번만 올린다", async () => {
+  await pipeline.sync();
+  await pipeline.draftPending();
+  const original = cafe24.postReply.bind(cafe24);
+  cafe24.postReply = async () => {
+    throw new Error("카페24 API 503: Service Unavailable");
+  };
+  await pipeline.review(1203, { decision: "approve", openedAt: Date.now() });
+
+  // 느린 카페24: 첫 등록이 끝나기 전에 두 번째 요청이 들어온다
+  cafe24.postReply = async (inquiry, content) => {
+    await sleep(20);
+    return original(inquiry, content);
+  };
+  const results = await Promise.allSettled([pipeline.retryReply(1203), pipeline.retryReply(1203)]);
+  assert.equal(cafe24.posted.length, 1);
+  assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+  const refused = results.find((r) => r.status === "rejected");
+  assert.match(String(refused?.reason), /등록하는 중/);
+  assert.equal(store.latestReply(1203)!.status, "posted");
+  // 끝난 뒤에는 '이미 등록됨'으로 막는다
+  await assert.rejects(() => pipeline.retryReply(1203), /이미 등록된/);
+  assert.equal(cafe24.posted.length, 1);
+});
+
+test("승인 등록이 끝나기 전에 다시 등록을 눌러도 한 번만 올린다", async () => {
+  await pipeline.sync();
+  await pipeline.draftPending();
+  const original = cafe24.postReply.bind(cafe24);
+  cafe24.postReply = async (inquiry, content) => {
+    await sleep(20);
+    return original(inquiry, content);
+  };
+  const approving = pipeline.review(1203, { decision: "approve", openedAt: Date.now() });
+  await assert.rejects(() => pipeline.retryReply(1203), /등록하는 중/);
+  assert.equal((await approving).reply?.status, "posted");
+  assert.equal(cafe24.posted.length, 1);
+});
+
+test("get_order가 문의 범위 때문에 주문을 거절했으면, 모델이 확인 필요를 끄고 냈어도 담당자 확인으로 넘긴다", async () => {
+  const deps = {
+    cafe24,
+    policies: PolicyStore.fromDir(path.join(ROOT, "data/policies")),
+    sizeCharts: loadSizeCharts(path.join(ROOT, "data/size-charts.json")),
+  };
+  // 모든 글에서 demo_user01의 주문을 실제 도구로 조회하고, 오류는 무시한 채 확인 필요 없이 초안을 낸다
+  pipeline = new Pipeline(store, cafe24, {
+    async draft(q) {
+      const trace: TraceEntry[] = [];
+      const getOrder = buildTools(deps, q, trace).find((t) => t.name === "get_order") as unknown as { run(input: object): Promise<unknown> };
+      await getOrder.run({ order_id: "20261020-0000123" }).catch(() => undefined);
+      return { ...(await goodDraft.draft(q)), trace };
+    },
+  }, 3);
+  await pipeline.sync();
+  await pipeline.draftPending();
+
+  const own = store.latestDraft(1203)!; // demo_user01의 문의: 거절 아님
+  assert.equal(own.needs_human, false);
+  const other = store.latestDraft(1201)!; // demo_user11의 문의
+  assert.equal(other.needs_human, true);
+  assert.ok(other.human_reasons.includes("[자동] 주문 조회가 거절됨(다른 회원의 주문, 20261020-0000123): 작성자의 주문인지 직접 확인할 것"));
+  const guest = store.latestDraft(1301)!; // 목업 후기는 회원 ID가 없다
+  assert.equal(guest.needs_human, true);
+  assert.ok(guest.human_reasons.some((r) => r.includes("주문 조회가 거절됨(비회원 문의")));
+  assert.ok(store.notificationsAfter(0, 100).some((n) => n.article_no === 1301 && n.type === "needs_human"));
 });
 
 test("초안 작성이 실패하면 오류 상태와 이유가 남는다", async () => {

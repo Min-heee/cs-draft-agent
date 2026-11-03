@@ -231,10 +231,36 @@
     setTimeout(poll, 3000);
   }
 
+  // 폼을 보내면 그 폼의 버튼을 끈다. '다시 등록'을 빠르게 두 번 누르면 같은 답이 카페24에 두 번 올라갈 수 있다.
+  // 누르자마자 끄면 누른 버튼의 값(decision=reject 등)이 폼에서 빠지므로, 보낸 다음 차례에 끈다. 그 사이 다시 누른 것은 보내지 않는다.
+  const sentForms = new Set();
+  const turnedOff = [];
+  document.addEventListener("submit", (e) => {
+    const form = e.target;
+    if (e.defaultPrevented || !(form instanceof HTMLFormElement)) return;
+    if (sentForms.has(form)) {
+      e.preventDefault();
+      return;
+    }
+    sentForms.add(form);
+    setTimeout(() => {
+      for (const el of form.elements) {
+        if (el.type === "submit" && !el.disabled) {
+          el.disabled = true;
+          turnedOff.push(el);
+        }
+      }
+    });
+  });
+
   // 뒤로 가기로 돌아온 화면(브라우저가 저장해 둔 화면)은 목록과 읽음 표시가 옛것이라 새로 불러온다.
   // 고치던 초안이 있으면 다시 불러오지 않는다(고친 내용이 사라질 수 있다). 개수와 알림은 다음 확인 때 맞춰진다.
+  // 이때 보내느라 꺼 둔 버튼은 다시 켠다.
   window.addEventListener("pageshow", (e) => {
-    if (e.persisted && !draftDirty) location.reload();
+    if (!e.persisted) return;
+    for (const el of turnedOff.splice(0)) el.disabled = false;
+    sentForms.clear();
+    if (!draftDirty) location.reload();
   });
 
   // 종 모양 버튼: 알림 목록 열고 닫기

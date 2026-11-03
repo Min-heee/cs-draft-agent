@@ -94,6 +94,13 @@ test("기본 도구는 끄고, 그 문의 작성자 범위의 MCP 읽기 도구�
   assert.match(value("-p"), /배송 언제 되나요/);
 });
 
+test("비회원 문의는 회원 ID를 빈 값으로 넘겨 MCP 서버가 주문 조회를 거절하게 한다", async () => {
+  await drafter().draft({ ...inquiry, member_id: null });
+  const { args }: { args: string[] } = JSON.parse(readFileSync(argsFile, "utf8"));
+  const mcp = JSON.parse(args[args.indexOf("--mcp-config") + 1]);
+  assert.deepEqual(mcp.mcpServers.cs.env, { CS_SCOPE: "inquiry", CS_MEMBER_ID: "" });
+});
+
 test("로그인이 만료되면 다시 로그인하라고 알린다", async () => {
   await assert.rejects(() => drafter("auth").draft(inquiry), (e: unknown) => e instanceof DraftError && /\/login/.test(e.message));
 });

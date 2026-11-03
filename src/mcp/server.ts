@@ -17,10 +17,12 @@ import type { InquiryStatus, Store } from "../db.ts";
 // 에이전트 도구를 MCP로 공개한다. API 크레딧 대신 이미 쓰고 있는 Claude 구독
 // (Claude Code, Claude Desktop)으로 초안을 만들 수 있게 하는 것이 목적이다.
 //
-// - 문의 한 건 모드(scope.memberId 있음): 읽기 도구 4개만. 그 회원의 주문만 보인다.
+// - 문의 한 건 모드(scope.inquiry): 읽기 도구 4개만. 그 회원의 주문만 보인다. 비회원 문의면 주문이 보이지 않고,
+//   회원 문의라도 회원 ID가 비어 있는 주문(비회원 주문)은 보이지 않는다.
 //   claude -p 로 문의 한 건씩 초안을 만들 때 쓴다(ClaudeCodeDrafter).
 // - 직원 모드(store 있음): 읽기 도구 + 문의함 도구(list_inquiries, get_inquiry, save_draft)
 //   + draft_replies 프롬프트. Claude Desktop에 연결해 "새 문의 초안 써 줘"로 쓴다.
+//   문의 초안을 쓸 때도 주문 조회에 회원 제한이 없다. 대신 저장할 때 save_draft가 확인한다.
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -132,17 +134,32 @@ export function createMcpServer(deps: ToolDeps, options: McpOptions): McpServer 
       if (!q) throw new Error(`문의 #${article_no}가 없습니다.`);
       if (q.status === "approved" || q.status === "rejected") throw new Error(`문의 #${article_no}는 이미 처리됐습니다.`);
 
-      // 직원 모드는 주문 조회에 회원 제한이 없다. 그래서 저장할 때, 초안에 나온 주문이
+      // 직원 모드는 문의 초안을 쓸 때도 주문 조회에 회원 제한이 없다. 그래서 저장할 때, 초안에 나온 주문이
       // 이 문의 작성자의 주문인지 다시 확인한다. 모델이 sources를 "order:…" 형식으로 쓴다고
       // 기대하지 않는다(2차 평가에서 "get_order:…"처럼 쓴 사례가 있었다). 근거, 답변,
       // 내부 메모에 나온 주문번호 모양을 모두 찾아 확인한다.
       const extra: string[] = [];
       const text = [...draft.sources, draft.answer, draft.internal_note].join("\n");
-      for (const orderId of new Set(text.match(ORDER_ID) ?? [])) {
+      const used = new Set(text.match(ORDER_ID) ?? []);
+      for (const orderId of used) {
         const order = await deps.cafe24.getOrder(orderId);
         if (!order) extra.push(`[자동] 근거로 쓴 주문을 찾을 수 없음(${orderId})`);
-        else if (q.member_id && order.member_id && order.member_id !== q.member_id) {
+        // 비회원 문의는 작성자와 주문을 맞춰 볼 수 없다(문의 한 건 모드에서는 get_order가 거절하는 경우).
+        else if (!q.member_id) extra.push(`[자동] 비회원 문의라 근거로 쓴 주문이 작성자의 것인지 확인할 수 없음(${orderId})`);
+        else if (!order.member_id) {
+          extra.push(`[자동] 회원 ID가 없는 주문(비회원 주문)을 근거로 씀: 문의 작성자의 주문인지 확인할 수 없음(${orderId})`);
+        } else if (order.member_id !== q.member_id) {
           extra.push(`[자동] 다른 회원의 주문을 근거로 씀(${orderId})`);
+        }
+      }
+      // 비회원 문의는 초안에서 주문번호만 빼고 주문 조회 결과(배송 상태·송장)를 쓰면 위 검사를 지나간다.
+      // 그래서 모델이 get_inquiry로 본 곳(제목, 본문, 연결 주문번호, 댓글의 앞선 글)에 주문번호가 있으면
+      // 초안 내용과 상관없이 담당자 확인으로 넘긴다.
+      if (!q.member_id) {
+        const asked = [q.title, q.content, q.order_id ?? "", q.thread ?? ""].join("\n").match(ORDER_ID) ?? [];
+        const unchecked = [...new Set(asked)].filter((orderId) => !used.has(orderId));
+        if (unchecked.length) {
+          extra.push(`[자동] 비회원 문의에 주문번호가 있음(${unchecked.join(", ")}): 작성자의 주문인지 확인하기 전에는 주문 내용을 답변에 쓰지 말 것`);
         }
       }
       const checked = applyGuardrails({ ...draft, human_reasons: [...draft.human_reasons, ...extra] }, now());

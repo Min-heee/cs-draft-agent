@@ -3,6 +3,8 @@
 //
 //   DB_FILE=data/eval-2.db node scripts/import-drafts.ts <drafts.json> <모델 이름> [오늘 ISO 시각]
 //
+// 오늘 시각을 주지 않으면 앱과 같은 기준(EVAL_NOW, 없으면 목업 모드의 MOCK_NOW, 실제 API 모드면 지금)을 쓴다.
+//
 // drafts.json: [{ article_no, draft: { category, answer, ..., tool_calls?: [{ tool, args, result_excerpt }] } }]
 
 import { readFileSync } from "node:fs";
@@ -15,8 +17,8 @@ if (!file || !model) {
   console.error("사용법: node scripts/import-drafts.ts <drafts.json> <모델 이름> [오늘 ISO 시각]");
   process.exit(1);
 }
-const today = todayIso ? new Date(todayIso) : new Date();
 const config = loadConfig();
+const today = todayIso ? new Date(todayIso) : (config.now ?? new Date());
 const store = new Store(config.dbFile);
 store.addInquiries(await createCafe24Client(config).listUnansweredInquiries());
 

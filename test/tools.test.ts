@@ -15,13 +15,13 @@ const deps = {
   sizeCharts: loadSizeCharts(path.join(ROOT, "data/size-charts.json")),
 };
 
-const inquiry = (member_id: string): Inquiry => ({
+const inquiry = (member_id: string | null): Inquiry => ({
   article_no: 1, board_no: 4, product_no: null, order_id: null, member_id,
   writer: "테스트", title: "t", content: "c", created_date: "2026-10-21T00:00:00+09:00",
 });
 
 // 도구 배열의 원소 타입은 다섯 도구 입력의 교집합이 되므로, 테스트에서는 입력 타입을 풀어 둔다.
-function tool(member: string, name: string, trace: TraceEntry[] = []): { run(input: object): unknown } {
+function tool(member: string | null, name: string, trace: TraceEntry[] = []): { run(input: object): unknown } {
   const found = buildTools(deps, inquiry(member), trace).find((t) => t.name === name);
   assert.ok(found, name);
   return found as unknown as { run(input: object): unknown };
@@ -45,6 +45,65 @@ test("다른 회원의 주문은 보여 주지 않는다", async () => {
   const trace: TraceEntry[] = [];
   await assert.rejects(() => Promise.resolve(tool("demo_user99", "get_order", trace).run({ order_id: "20261020-0000123" })), /문의 작성자의 주문이 아닙니다/);
   assert.match(trace[0].output, /^오류:/);
+});
+
+test("비회원 문의에서는 주문을 보여 주지 않는다 (작성자와 주문을 맞춰 볼 수 없음)", async () => {
+  const trace: TraceEntry[] = [];
+  await assert.rejects(
+    () => Promise.resolve(tool(null, "get_order", trace).run({ order_id: "20261020-0000123" })),
+    /비회원 문의라 작성자와 주문을 맞춰 볼 수 없습니다/,
+  );
+  assert.match(trace[0].output, /^오류:/);
+  assert.doesNotMatch(trace[0].output, /배송/); // 주문 내용이 기록에도 남지 않는다
+});
+
+test("주문 조회 범위: 직원 모드는 제한 없음, 문의 범위는 그 회원의 주문만", async () => {
+  const { createToolHandlers } = await import("../src/agent/tools.ts");
+  const ORDER = { order_id: "20261020-0000123" }; // demo_user01의 주문
+  // 직원 모드 MCP: 회원 ID가 없어도 보인다(저장할 때 save_draft가 확인한다)
+  const staff = createToolHandlers(deps, { inquiry: false, memberId: null });
+  assert.equal(JSON.parse(await staff.get_order(ORDER)).배송상태, "배송 중");
+  // 문의 범위: 같은 회원이면 보이고, 다른 회원이나 비회원이면 거절한다
+  const own = createToolHandlers(deps, { inquiry: true, memberId: "demo_user01" });
+  assert.equal(JSON.parse(await own.get_order(ORDER)).배송상태, "배송 중");
+  await assert.rejects(createToolHandlers(deps, { inquiry: true, memberId: "demo_user99" }).get_order(ORDER), /문의 작성자의 주문이 아닙니다/);
+  await assert.rejects(createToolHandlers(deps, { inquiry: true, memberId: null }).get_order(ORDER), /비회원 문의라/);
+});
+
+test("문의 범위: 회원 문의라도 회원 ID가 비어 있는 주문(비회원 주문)은 보여 주지 않는다", async () => {
+  const { createToolHandlers } = await import("../src/agent/tools.ts");
+  const ORDER = { order_id: "20261020-0000123" };
+  const order = (await deps.cafe24.getOrder(ORDER.order_id))!;
+  // 목업 주문은 모두 회원 주문이라, 같은 주문의 회원 ID만 비운 카페24를 쓴다(실제 API는 빈 문자열일 수도 있다).
+  for (const member_id of [null, ""]) {
+    const cafe24: Cafe24Client = Object.assign(Object.create(deps.cafe24), { getOrder: async () => ({ ...order, member_id }) });
+    const trace: TraceEntry[] = [];
+    const guestOrder = buildTools({ ...deps, cafe24 }, inquiry("demo_user01"), trace).find((t) => t.name === "get_order");
+    await assert.rejects(
+      () => Promise.resolve((guestOrder as unknown as { run(input: object): unknown }).run(ORDER)),
+      /회원 ID가 없는 주문\(비회원 주문\)이라 문의 작성자의 주문인지 맞춰 볼 수 없습니다/,
+    );
+    assert.doesNotMatch(trace[0].output, /배송/);
+    // 직원 모드는 그대로 보인다
+    const staff = createToolHandlers({ ...deps, cafe24 }, { inquiry: false, memberId: null });
+    assert.equal(JSON.parse(await staff.get_order(ORDER)).배송상태, "배송 중");
+  }
+});
+
+test("초안 기록에서 문의 범위 때문에 거절된 주문 조회를 찾는다", async () => {
+  const { refusedOrderReasons } = await import("../src/agent/tools.ts");
+  const ORDER = { order_id: "20261020-0000123" };
+  const trace: TraceEntry[] = [];
+  await assert.rejects(() => Promise.resolve(tool(null, "get_order", trace).run(ORDER)));
+  await assert.rejects(() => Promise.resolve(tool("demo_user99", "get_order", trace).run(ORDER)));
+  await tool("demo_user01", "get_order", trace).run(ORDER); // 자기 주문은 거절이 아니다
+  await assert.rejects(() => Promise.resolve(tool("demo_user01", "get_order", trace).run({ order_id: "20261001-0009999" }))); // 없는 주문도 아니다
+  assert.deepEqual(refusedOrderReasons(trace), [
+    "[자동] 주문 조회가 거절됨(비회원 문의, 20261020-0000123): 작성자의 주문인지 직접 확인할 것",
+    "[자동] 주문 조회가 거절됨(다른 회원의 주문, 20261020-0000123): 작성자의 주문인지 직접 확인할 것",
+  ]);
+  // claude -p 경로에서 "오류:"가 붙지 않고 문구만 와도 찾는다
+  assert.equal(refusedOrderReasons([{ tool: "get_order", input: ORDER, output: trace[0].output.replace(/^오류: /, "") }]).length, 1);
 });
 
 test("없는 주문번호는 오류로 알린다", async () => {
@@ -101,7 +160,7 @@ test("사이즈 옵션이 없고 재고를 세지 않는 상품: 품절로 보�
     getOrder: async () => null,
     postReply: async () => ({ remote_id: "x" }),
   };
-  const h = createToolHandlers({ ...deps, cafe24 }, { memberId: null });
+  const h = createToolHandlers({ ...deps, cafe24 }, { inquiry: false, memberId: null });
   const summary = JSON.parse(await h.get_product({ product_no: 35 }));
   assert.equal(summary.옵션재고[0].재고, "판매중(재고 수량을 관리하지 않는 상품)");
   assert.match(summary.옵션재고[0].옵션, /옵션 없음/);

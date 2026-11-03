@@ -9,8 +9,8 @@ import { createMcpServer } from "./server.ts";
 // MCP 서버 실행 파일 (stdio). stdout은 MCP 통신에만 쓰므로 여기서 console.log를 쓰면 안 된다.
 //
 // 문의 한 건 모드:  CS_SCOPE=inquiry CS_MEMBER_ID=<회원 ID> node src/mcp/main.ts
-//                   (비회원 문의면 CS_MEMBER_ID 없이 CS_SCOPE=inquiry만 준다)
-// 직원 모드:        node src/mcp/main.ts   (DB_FILE의 문의함을 읽고 초안을 저장한다)
+//                   (비회원 문의면 CS_MEMBER_ID 없이 CS_SCOPE=inquiry만 준다. 이때 get_order는 주문을 보여 주지 않는다)
+// 직원 모드:        node src/mcp/main.ts   (DB_FILE의 문의함을 읽고 초안을 저장한다. 주문 조회에 회원 제한이 없다)
 
 const config = loadConfig();
 const deps = {
@@ -22,8 +22,9 @@ const memberId = process.env.CS_MEMBER_ID?.trim() || null;
 const inquiryMode = process.env.CS_SCOPE === "inquiry" || memberId !== null;
 
 const server = createMcpServer(deps, {
-  scope: { memberId },
+  scope: { inquiry: inquiryMode, memberId },
   store: inquiryMode ? undefined : new Store(config.dbFile),
   reviewUrl: `http://localhost:${config.port}`,
+  now: config.now ? () => config.now! : undefined,
 });
 await server.connect(new StdioServerTransport());

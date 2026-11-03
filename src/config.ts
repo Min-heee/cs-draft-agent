@@ -8,6 +8,12 @@ import { Cafe24ComplaintSource, FileComplaintSource, MockComplaintSource, type C
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+/**
+ * 카페24 목업 모드의 "지금" 기본값. data/mock 글은 2026-10-20~21에 쓴 것으로 되어 있어서, 실제 시각으로 열면
+ * 불만 사유 탭(지난 7일·30일)이 비고 초안의 날짜 계산도 목업 글과 어긋난다. 평가 때 쓴 시각(EVAL_NOW)과 같게 둔다.
+ */
+export const MOCK_NOW = "2026-10-21T15:30:00+09:00";
+
 export interface AppConfig {
   dbFile: string;
   dataDir: string;
@@ -21,7 +27,10 @@ export interface AppConfig {
   concurrency: number;
   /** 직원이 직접 답을 쓸 때 건당 걸리는 시간(분). 실제로 재서 넣는다. 없으면 절감 시간을 계산하지 않는다. */
   baselineMinutes: number | null;
-  /** 평가 재현용 "지금" 시각(EVAL_NOW). 없으면 실제 현재 시각을 쓴다. */
+  /**
+   * 평가 재현용 "지금" 시각(EVAL_NOW). 없으면 카페24 목업 모드는 MOCK_NOW, 실제 API 모드는 실제 현재 시각(null)을 쓴다.
+   * 목업 모드라도 시험 글 파일(COMPLAINT_SOURCE)을 읽을 때는 그 파일의 날짜가 따로 있어 실제 시각을 쓴다.
+   */
   now: Date | null;
   /** 관리자 화면을 띄워 둔 동안 카페24에서 새 글을 확인하는 간격(초). 0이면 "지금 확인" 버튼으로만 가져온다. */
   autoSyncSeconds: number;
@@ -45,20 +54,27 @@ function oneOf<T extends string>(value: string | undefined, allowed: readonly T[
 // 쓰는 변수와 겹쳐서, 앱을 Claude Code 안에서 띄우면 그 값이 섞여 들어왔다.
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const baseline = Number(env.BASELINE_MINUTES_PER_REPLY);
-  const now = env.EVAL_NOW ? new Date(env.EVAL_NOW) : null;
+  const evalNow = env.EVAL_NOW ? new Date(env.EVAL_NOW) : null;
   const autoSync = Number(env.AUTO_SYNC_SECONDS ?? 60);
   const drip = Number(env.MOCK_DRIP ?? 0);
+  const cafe24Mode = oneOf(env.CAFE24_MODE, ["mock", "api"], "mock");
+  const complaintSourceFile = env.COMPLAINT_SOURCE ? path.resolve(ROOT, env.COMPLAINT_SOURCE) : null;
   return {
     dbFile: path.resolve(ROOT, env.DB_FILE ?? "data/app.db"),
     dataDir: path.join(ROOT, "data"),
-    cafe24Mode: oneOf(env.CAFE24_MODE, ["mock", "api"], "mock"),
+    cafe24Mode,
     drafter: oneOf(env.DRAFTER, ["claude", "claude-code", "fake"], "claude"),
     model: env.DRAFT_MODEL ?? "claude-opus-5-5",
     effort: oneOf(env.DRAFT_EFFORT, ["low", "medium", "high"], "medium"),
     port: Number(env.PORT ?? 3000),
     concurrency: Math.max(1, Number(env.DRAFT_CONCURRENCY ?? 3)),
     baselineMinutes: Number.isFinite(baseline) && baseline > 0 ? baseline : null,
-    now: now && !Number.isNaN(now.getTime()) ? now : null,
+    now:
+      evalNow && !Number.isNaN(evalNow.getTime())
+        ? evalNow
+        : cafe24Mode === "mock" && !complaintSourceFile
+          ? new Date(MOCK_NOW)
+          : null,
     // 카페24 호출 한도를 생각해 10초보다 자주 확인하지 않는다.
     autoSyncSeconds: Number.isFinite(autoSync) && autoSync > 0 ? Math.max(10, autoSync) : 0,
     mockDrip: Number.isFinite(drip) && drip > 0 ? Math.floor(drip) : 0,
@@ -68,7 +84,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       env.DRAFTER === "claude-code" ? "claude-code" : "rules",
     ),
     complaintReportHour: reportHour(env.COMPLAINT_REPORT_HOUR),
-    complaintSourceFile: env.COMPLAINT_SOURCE ? path.resolve(ROOT, env.COMPLAINT_SOURCE) : null,
+    complaintSourceFile,
     googleSheet:
       env.GOOGLE_SERVICE_ACCOUNT_FILE?.trim() && env.GOOGLE_SHEET_ID?.trim()
         ? { keyFile: expandHome(env.GOOGLE_SERVICE_ACCOUNT_FILE.trim()), ...sheetId(env.GOOGLE_SHEET_ID.trim()) }

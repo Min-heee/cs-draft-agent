@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/cli.ts serve",
     "start:fake": "DRAFTER=fake DB_FILE=data/fake.db node --env-file-if-exists=.env src/cli.ts serve",
+    "start:demo": "node scripts/demo.ts",
     "start:claude-code": "DRAFTER=claude-code node --env-file-if-exists=.env src/cli.ts serve",
     "sync": "node --env-file-if-exists=.env src/cli.ts sync",
     "draft": "node --env-file-if-exists=.env src/cli.ts draft",

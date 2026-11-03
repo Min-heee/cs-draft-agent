@@ -1,4 +1,5 @@
 import { DraftError, type Drafter } from "./agent/drafter.ts";
+import { refusedOrderReasons } from "./agent/tools.ts";
 import { isComment, isReview, PartialListError, type Cafe24Client, type Inquiry } from "./cafe24/types.ts";
 import type { ReplyRow, ReviewAction, Store } from "./db.ts";
 import { editRatio } from "./textdiff.ts";
@@ -40,6 +41,8 @@ export class Pipeline {
   private readonly drafter: Drafter;
   private readonly concurrency: number;
   private running: Promise<void> | null = null;
+  /** 카페24에 답을 올리는 중인 글 번호. 같은 글의 등록이 동시에 두 번 돌지 않게 한다. */
+  private readonly posting = new Set<number>();
 
   constructor(store: Store, cafe24: Cafe24Client, drafter: Drafter, concurrency = 3) {
     this.store = store;
@@ -97,7 +100,12 @@ export class Pipeline {
     if (!inquiry) throw new Error(`문의 ${articleNo}가 없습니다.`);
     this.store.setStatus(articleNo, "drafting");
     try {
-      const result = await this.drafter.draft(inquiry);
+      const drafted = await this.drafter.draft(inquiry);
+      // get_order가 문의 범위 밖이라 주문을 거절했으면, 모델이 확인 필요를 끄고 냈어도 담당자 확인으로 넘긴다.
+      const refused = refusedOrderReasons(drafted.trace);
+      const result = refused.length
+        ? { ...drafted, needs_human: true, human_reasons: [...new Set([...drafted.human_reasons, ...refused])] }
+        : drafted;
       this.store.insertDraft({ ...result, article_no: articleNo });
       this.store.setStatus(articleNo, "drafted");
       this.store.addNotification(
@@ -162,8 +170,15 @@ export class Pipeline {
     return this.postReply(articleNo, review.id, review.final_answer);
   }
 
+  /**
+   * 승인과 다시 등록이 함께 쓴다. 같은 글을 등록하는 중이면 거절한다.
+   * 확인과 표시는 await 전에 한다. 그래야 등록이 끝나기 전에 '다시 등록'을 한 번 더 눌러도(다른 탭 포함)
+   * 같은 답이 카페24에 두 번 올라가지 않는다.
+   */
   private async postReply(articleNo: number, reviewId: number, content: string): Promise<ReplyRow> {
+    if (this.posting.has(articleNo)) throw new Error("이 답변을 카페24에 등록하는 중입니다. 잠시 뒤 다시 확인해 주세요.");
     const inquiry = this.store.getInquiry(articleNo)!;
+    this.posting.add(articleNo);
     try {
       const { remote_id } = await this.cafe24.postReply(inquiry, content);
       this.store.insertReply({ article_no: articleNo, review_id: reviewId, status: "posted", remote_id, error: null });
@@ -172,6 +187,8 @@ export class Pipeline {
       const message = error instanceof Error ? error.message : String(error);
       this.store.insertReply({ article_no: articleNo, review_id: reviewId, status: "failed", remote_id: null, error: message });
       this.store.addNotification({ article_no: articleNo, type: "post_failed", message: `등록 실패 · ${kindName(inquiry)} · ${headline(inquiry)}` });
+    } finally {
+      this.posting.delete(articleNo);
     }
     return this.store.latestReply(articleNo)!;
   }

@@ -129,6 +129,9 @@ if (command === "sync") {
   serve({ fetch: app.fetch, port: config.port, hostname: process.env.HOST ?? "127.0.0.1" }, (info) => {
     console.log(`관리자 화면: http://localhost:${info.port}`);
     console.log(config.autoSyncSeconds ? `새 글을 ${config.autoSyncSeconds}초마다 확인합니다.` : "자동 확인 꺼짐 (AUTO_SYNC_SECONDS=0)");
+    if (config.now) {
+      console.log(`기준 시각: ${config.now.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} (EVAL_NOW, 없으면 목업 글 날짜에 맞춘 기본값)`);
+    }
     watcher.start();
     if (config.complaintReportHour >= 0) {
       console.log(`불만 사유 리포트: 매일 ${config.complaintReportHour}시 이후 처음 확인할 때 만듭니다(${complaintSource.name}).`);

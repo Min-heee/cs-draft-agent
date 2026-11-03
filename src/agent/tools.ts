@@ -17,8 +17,32 @@ export interface ToolDeps {
 }
 
 export interface ToolScope {
-  /** 문의 작성자의 회원 ID. 있으면 이 회원의 주문만 보여 준다. */
+  /**
+   * 문의 한 건의 초안을 쓰는 중이면 true(API 도구 실행기, MCP 문의 한 건 모드). 그 문의 작성자의 주문만 보여 준다.
+   * false는 직원 모드 MCP다. 직원 모드는 문의 초안을 쓸 때도 주문을 제한하지 않고, 저장할 때 save_draft가 확인한다.
+   */
+  inquiry: boolean;
+  /**
+   * 문의 작성자의 회원 ID. 문의 범위면 주문의 회원 ID가 이것과 같을 때만 보여 준다.
+   * 그래서 비회원 문의(null)도, 회원 ID가 비어 있는 주문(비회원 주문)도 보여 주지 않는다.
+   */
   memberId: string | null;
+}
+
+// get_order가 문의 범위 밖이라 주문을 보여 주지 않을 때 쓰는 문구. 초안 기록에서 이 문구를 찾아
+// 담당자 확인으로 넘긴다(refusedOrderReasons).
+const ORDER_REFUSALS = {
+  guestInquiry: { message: "비회원 문의라 작성자와 주문을 맞춰 볼 수 없습니다.", label: "비회원 문의" },
+  otherMember: { message: "이 주문은 문의 작성자의 주문이 아닙니다.", label: "다른 회원의 주문" },
+  guestOrder: {
+    message: "이 주문은 회원 ID가 없는 주문(비회원 주문)이라 문의 작성자의 주문인지 맞춰 볼 수 없습니다.",
+    label: "회원 ID가 없는 주문",
+  },
+} as const;
+const HAND_OFF = " 주문 내용을 답변에 쓰지 말고 담당자 확인으로 넘기세요.";
+
+function refuseOrder(kind: keyof typeof ORDER_REFUSALS): Error {
+  return new Error(ORDER_REFUSALS[kind].message + HAND_OFF);
 }
 
 export const SUBMIT_TOOL = "submit_draft";
@@ -131,10 +155,14 @@ export function summarizeProduct(product: Product, chart: SizeChart | undefined)
 export function createToolHandlers(deps: ToolDeps, scope: ToolScope) {
   return {
     async get_order(input: z.infer<typeof OrderInput>): Promise<string> {
+      // 비회원 문의는 작성자와 주문을 맞춰 볼 방법이 없다. 주문번호만 알면 남의 주문을 볼 수 있으므로 조회하지 않는다.
+      if (scope.inquiry && !scope.memberId) throw refuseOrder("guestInquiry");
       const order = await deps.cafe24.getOrder(input.order_id.trim());
       if (!order) throw new Error(`주문번호 ${input.order_id}를 찾을 수 없습니다.`);
-      if (scope.memberId && order.member_id && order.member_id !== scope.memberId) {
-        throw new Error("이 주문은 문의 작성자의 주문이 아닙니다. 주문 내용을 답변에 쓰지 말고 담당자 확인으로 넘기세요.");
+      // 회원 문의라도 회원 ID가 비어 있는 주문(비회원 주문)은 같은 까닭으로 보여 주지 않는다.
+      // 그 회원이 로그인하지 않고 산 주문일 수도 있지만, 맞춰 볼 방법이 없다.
+      if (scope.inquiry && order.member_id !== scope.memberId) {
+        throw refuseOrder(order.member_id ? "otherMember" : "guestOrder");
       }
       return JSON.stringify(summarizeOrder(order));
     },
@@ -185,9 +213,27 @@ export function createToolHandlers(deps: ToolDeps, scope: ToolScope) {
 
 export type ToolHandlers = ReturnType<typeof createToolHandlers>;
 
+/**
+ * 초안 기록(trace)에서 get_order가 문의 범위 밖이라 거절한 호출을 찾아 담당자 확인 이유로 돌려준다.
+ * 거절 문구로 "담당자 확인으로 넘기세요"라고 알려도 모델이 따른다는 보장이 없어서 코드로 넘긴다.
+ * 앞의 "오류:"는 경로에 따라 붙지 않을 수 있어서(claude -p의 MCP 오류 표시는 확인 안 함) 문구가 들어 있는지로 본다.
+ */
+export function refusedOrderReasons(trace: TraceEntry[]): string[] {
+  const reasons = new Set<string>();
+  for (const entry of trace) {
+    if (entry.tool !== "get_order") continue;
+    const refusal = Object.values(ORDER_REFUSALS).find((r) => entry.output.includes(r.message));
+    if (!refusal) continue;
+    const orderId = (entry.input as { order_id?: unknown } | null)?.order_id;
+    const which = typeof orderId === "string" ? `, ${orderId.trim()}` : "";
+    reasons.add(`[자동] 주문 조회가 거절됨(${refusal.label}${which}): 작성자의 주문인지 직접 확인할 것`);
+  }
+  return [...reasons];
+}
+
 /** Claude API 도구 실행기용 도구. 호출을 trace에 기록해 검토 화면에 보여 준다. */
 export function buildTools(deps: ToolDeps, inquiry: Inquiry, trace: TraceEntry[]) {
-  const handlers = createToolHandlers(deps, { memberId: inquiry.member_id });
+  const handlers = createToolHandlers(deps, { inquiry: true, memberId: inquiry.member_id });
 
   async function recorded(tool: string, input: unknown, work: () => Promise<string>): Promise<string> {
     try {

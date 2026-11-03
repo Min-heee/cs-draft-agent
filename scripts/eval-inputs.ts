@@ -3,6 +3,8 @@
 //   node scripts/eval-inputs.ts <출력 폴더> <비교 기준 DB> [오늘 ISO 시각] [새 초안 DB]
 //   예) node scripts/eval-inputs.ts /tmp/eval-3 data/eval-2.db 2026-10-21T06:30:00Z
 //
+// [오늘 ISO 시각]을 주지 않으면 앱의 목업 모드 기본값(src/config.ts의 MOCK_NOW)을 쓴다. 이 스크립트는 목업 글만 읽는다.
+//
 // [새 초안 DB]를 주면 채점용 파일에 그 DB의 초안을 new_draft로 넣는다. 초안을 다른 경로(예: DRAFTER=claude-code)로
 // 이미 만들어 두고 채점만 할 때 쓴다(eval/workflow.js의 judgeOnly).
 //
@@ -22,7 +24,7 @@ import { z } from "zod";
 import { DraftSchema } from "../src/agent/guardrails.ts";
 import { buildSystemPrompt, todayLine, userMessage } from "../src/agent/prompt.ts";
 import { MockCafe24Client } from "../src/cafe24/mock.ts";
-import { ROOT } from "../src/config.ts";
+import { MOCK_NOW, ROOT } from "../src/config.ts";
 import { Store } from "../src/db.ts";
 import { PolicyStore } from "../src/knowledge/policies.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
@@ -33,7 +35,7 @@ if (!outDir || !baselineDb) {
   console.error("사용법: node scripts/eval-inputs.ts <출력 폴더> <비교 기준 DB> [오늘 ISO 시각]");
   process.exit(1);
 }
-const today = todayIso ? new Date(todayIso) : new Date();
+const today = todayIso ? new Date(todayIso) : new Date(MOCK_NOW);
 const deps = {
   cafe24: new MockCafe24Client(path.join(ROOT, "data/mock")),
   policies: PolicyStore.fromDir(path.join(ROOT, "data/policies")),
@@ -41,7 +43,7 @@ const deps = {
 };
 
 // MCP 클라이언트가 모델에게 보여 주는 것과 같은 도구 목록
-const server = createMcpServer(deps, { scope: { memberId: "eval" } });
+const server = createMcpServer(deps, { scope: { inquiry: true, memberId: "eval" } });
 const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 await server.connect(serverSide);
 const client = new Client({ name: "eval-inputs", version: "1.0.0" });

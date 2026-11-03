@@ -3,8 +3,10 @@
 //   node scripts/eval-complaints.ts [--runs 3] [--sets dev] [--rules-only] [--show-errors]
 //
 // - dev: 규칙·프롬프트를 만들며 본 글(data/complaint-eval/dev.json, bh044 가짜 글 27건). 기본값.
-// - holdout, hard: 만들 때 한 번도 보지 않은 시험 글. --sets dev,holdout,hard처럼 이름을 줘야 돌린다.
-//   시험 글은 글별 결과(아이디·정답·결과)를 파일에도 화면에도 남기지 않는다(개발하며 보지 않게).
+// - holdout, hard: 개발용과 따로 AI가 쓴 시험 글(2026-10-28에 여러 번 쟀음, docs/COMPLAINTS.md 참고).
+//   --sets dev,holdout,hard처럼 이름을 줘야 돌린다.
+//   시험 글의 글별 결과(아이디·정답·결과)는 지금은 파일에도 화면에도 남기지 않는다(개발하며 보지 않게).
+//   2026-10-28 첫 측정 파일(holdout, hard 각각의 첫 측정)에는 남았다.
 // LLM은 로그인한 Claude Code(구독)로만 부른다. 결과는 data/complaint-eval/results-*.md·json(git에 올리지 않음)에 쓴다.
 //
 // 주의: 시험 글과 정답은 Claude 하위 에이전트가 기준표(GUIDE.md)대로 쓰고 달았다. 분류도 Claude다.

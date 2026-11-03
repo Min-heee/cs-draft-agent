@@ -128,7 +128,9 @@ export class ClaudeCodeDrafter implements Drafter {
         [SERVER]: {
           command: process.execPath,
           args: [`--env-file-if-exists=${path.join(root, ".env")}`, path.join(root, "src/mcp/main.ts")],
-          env: { CS_SCOPE: "inquiry", ...(inquiry.member_id ? { CS_MEMBER_ID: inquiry.member_id } : {}) },
+          // 비회원 문의는 CS_MEMBER_ID를 빈 값으로 넘긴다. MCP 서버가 주문 조회를 거절한다(get_order).
+          // 빼지 않고 비워 두는 것은 앱 환경에 CS_MEMBER_ID가 있어도 그 값을 물려받지 않게 하려는 것이다.
+          env: { CS_SCOPE: "inquiry", CS_MEMBER_ID: inquiry.member_id ?? "" },
         },
       },
     };
