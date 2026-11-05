@@ -185,6 +185,9 @@ export function runClaude(commandLine: string[], args: string[], timeoutMs: numb
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+    // 덩어리(Buffer)마다 따로 글자로 바꾸면 경계에 걸친 한글(3바이트)이 깨진다. 스트림이 이어서 풀게 한다.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.on("error", (error) => {

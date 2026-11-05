@@ -88,11 +88,18 @@ export class Pipeline {
   }
 
   private async runPending(): Promise<void> {
-    const queue = this.store.listInquiries(["new"]).map((q) => q.article_no);
-    const worker = async () => {
-      for (let next = queue.shift(); next !== undefined; next = queue.shift()) await this.draftOne(next);
-    };
-    await Promise.all(Array.from({ length: this.concurrency }, worker));
+    // 도는 동안 new가 된 글(새로 들어온 글, '다시 만들기')은 draftPending이 이 작업을 돌려줄 뿐 줄에 넣지 않는다.
+    // 그래서 줄이 비면 new를 다시 읽어 남은 것이 없을 때까지 이어 간다. draftOne은 글을 늘 drafted나 error로 옮긴다.
+    for (let queue = this.pendingIds(); queue.length; queue = this.pendingIds()) {
+      const worker = async () => {
+        for (let next = queue.shift(); next !== undefined; next = queue.shift()) await this.draftOne(next);
+      };
+      await Promise.all(Array.from({ length: this.concurrency }, worker));
+    }
+  }
+
+  private pendingIds(): number[] {
+    return this.store.listInquiries(["new"]).map((q) => q.article_no);
   }
 
   async draftOne(articleNo: number): Promise<void> {

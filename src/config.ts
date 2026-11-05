@@ -57,6 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const evalNow = env.EVAL_NOW ? new Date(env.EVAL_NOW) : null;
   const autoSync = Number(env.AUTO_SYNC_SECONDS ?? 60);
   const drip = Number(env.MOCK_DRIP ?? 0);
+  const concurrency = Math.floor(Number(env.DRAFT_CONCURRENCY ?? 3));
   const cafe24Mode = oneOf(env.CAFE24_MODE, ["mock", "api"], "mock");
   const complaintSourceFile = env.COMPLAINT_SOURCE ? path.resolve(ROOT, env.COMPLAINT_SOURCE) : null;
   return {
@@ -67,7 +68,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     model: env.DRAFT_MODEL ?? "claude-opus-5-5",
     effort: oneOf(env.DRAFT_EFFORT, ["low", "medium", "high"], "medium"),
     port: Number(env.PORT ?? 3000),
-    concurrency: Math.max(1, Number(env.DRAFT_CONCURRENCY ?? 3)),
+    // 숫자가 아니면(NaN) 일꾼이 0명이 되어 초안이 조용히 만들어지지 않는다. 그때는 기본값 3을 쓴다.
+    concurrency: Number.isFinite(concurrency) ? Math.max(1, concurrency) : 3,
     baselineMinutes: Number.isFinite(baseline) && baseline > 0 ? baseline : null,
     now:
       evalNow && !Number.isNaN(evalNow.getTime())
