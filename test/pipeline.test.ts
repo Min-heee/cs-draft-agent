@@ -423,3 +423,29 @@ test("화면: 상품 후기에는 별점 칩과 '승인하고 댓글 등록' 버
   assert.ok(page.includes("승인하고 댓글 등록"));
   assert.ok(!(await (await app.request("/inquiries/1201")).text()).includes("댓글 등록"));
 });
+
+test("초안을 만드는 도중에 다시 만들기를 누른 글도 그 작업이 이어서 만든다", async () => {
+  const fake = new FakeDrafter();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let first: number | null = null;
+  const slow = {
+    draft: async (q: Parameters<FakeDrafter["draft"]>[0]) => {
+      first ??= q.article_no;
+      if (q.article_no === first) await gate; // 첫 글에서 멈춰 둔다
+      return fake.draft(q);
+    },
+  };
+  const p = new Pipeline(store, cafe24, slow, 2);
+  await p.sync();
+  const run = p.draftPending();
+  // 다른 일꾼이 만든 초안 하나를 다시 만들기로 돌린다(서버의 /redraft와 같은 일)
+  while (store.listInquiries(["drafted"]).length === 0) await new Promise((r) => setTimeout(r, 5));
+  const redrafted = store.listInquiries(["drafted"])[0].article_no;
+  store.setStatus(redrafted, "new");
+  void p.draftPending();
+  release();
+  await run;
+  assert.equal(store.getInquiry(redrafted)!.status, "drafted");
+  assert.equal(store.listInquiries(["new"]).length, 0);
+});

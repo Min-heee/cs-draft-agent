@@ -38,3 +38,9 @@ test("claude에 넘기는 환경에서 API 키와 부모 세션 변수를 뺀다
   });
   assert.deepEqual(Object.keys(env).sort(), ["CS_MEMBER_ID", "HOME", "PATH"]);
 });
+
+test("DRAFT_CONCURRENCY가 숫자가 아니면 기본값 3을 쓴다(일꾼 0명이 되지 않게)", () => {
+  assert.equal(loadConfig({ DRAFT_CONCURRENCY: "abc" }).concurrency, 3);
+  assert.equal(loadConfig({ DRAFT_CONCURRENCY: "0" }).concurrency, 1);
+  assert.equal(loadConfig({ DRAFT_CONCURRENCY: "5" }).concurrency, 5);
+});

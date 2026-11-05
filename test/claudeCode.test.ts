@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, test } from "node:test";
-import { ClaudeCodeDrafter } from "../src/agent/claudeCode.ts";
+import { ClaudeCodeDrafter, runClaude } from "../src/agent/claudeCode.ts";
 import { DraftError } from "../src/agent/drafter.ts";
 import type { Inquiry } from "../src/cafe24/types.ts";
 import { ROOT } from "../src/config.ts";
@@ -119,3 +119,14 @@ test("claude 명령이 없으면 알린다", async () => {
 });
 
 test.after(() => rmSync(dir, { recursive: true, force: true }));
+
+test("한글이 출력 덩어리 경계에 걸려 잘려도 깨지지 않는다", async () => {
+  // 한 글자(3바이트) 가운데서 두 번에 나눠 쓴다
+  const script = `
+    const line = Buffer.from(JSON.stringify({ type: "result", result: "안녕하세요" }) + "\\n", "utf8");
+    const cut = line.indexOf(Buffer.from("안", "utf8")) + 1;
+    process.stdout.write(line.subarray(0, cut));
+    setTimeout(() => process.stdout.write(line.subarray(cut)), 50);`;
+  const events = await runClaude([process.execPath, "-e", script], [], 5000);
+  assert.equal(events[0].result, "안녕하세요");
+});
